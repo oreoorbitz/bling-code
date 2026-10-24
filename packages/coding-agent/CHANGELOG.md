@@ -4,28 +4,33 @@
 
 ### Added
 
-- Added the `ling` executable and `ling configure` command for explicit OpenAI-compatible Ling 3.1 Flash and Ling 3.0 Flash endpoints, with externalized credentials, endpoint-specific reasoning dialects, conservative served-context limits, and vendor-recommended sampling profiles.
-- Added offline `ling doctor` diagnostics for endpoint, dialect, model-limit, credential-reference, and saved-default problems without making API requests or displaying credentials.
+- Added the `bling` executable and `bling configure` command for explicit OpenAI-compatible Ling 3.1 Flash and Ling 3.0 Flash endpoints, with externalized credentials, endpoint-specific reasoning dialects, conservative served-context limits, and vendor-recommended sampling profiles.
+- Added offline `bling doctor` diagnostics for endpoint, dialect, model-limit, credential-reference, and saved-default problems without making API requests or displaying credentials.
 - Added Ling-focused coding guidance for verifiable long-running tasks and a startup guard against silently replacing an unavailable Ling default with another provider.
-- Added project-local learning with deterministic action/reasoning logs, bounded curated memory, long-context `/improve` and `ling improve` reviews, and explicit approval for memory and project-skill proposals.
+- Added project-local learning with deterministic action/reasoning logs, bounded curated memory, long-context `/improve` and `bling improve` reviews, and explicit approval for memory and project-skill proposals.
 - Added optional threshold-based routing through `perplexity/pplx-decider-v1.2`, reusing Pi's classifier runtime and external credentials without enabling OpenRouter implicitly.
 - Added core strong-solver and oracle-gate instructions plus project-defined executable benchmarks with deterministic definition/run IDs, bounded output, explicit oracles, and reviewable ledger evidence.
 - Added benchmark positive/negative oracle validation, pre/post-run definition-integrity evidence, isolated child environments with named-variable allowlisting, and explicit trusted full-environment inheritance.
-- Added Decider shadow calibration through `ling improve --decider-shadow` and `/improve decider-shadow`, plus threshold-sensitive decision caching.
+- Added Decider shadow calibration through `bling improve --decider-shadow` and `/improve decider-shadow`, plus threshold-sensitive decision caching.
 - Added assistant-to-tool causal links in the project action ledger and ledger-derived proposal evidence classes (`executed`, `observed`, `inferred`, and `human`).
 - Device-code login (for example GitHub Copilot) now opens the verification page and copies the code when you press Enter. Providers can turn either action off with `openBrowserOnConfirm: false` or `copyCodeOnConfirm: false` ([#9282](https://github.com/earendil-works/pi/issues/9282), [#9301](https://github.com/earendil-works/pi/pull/9301))
+- Added a control harness profile: `harness.profile` (`bling` default, `stock`) and `--harness <bling|stock>` reproduce upstream Pi's system prompt without Bling's additions or curated project memory, and ledger/benchmark records now carry the active `harnessProfile` so harness changes can be benchmarked against a stock baseline.
+- Added upstream host capture: OpenAI-compatible responses that report a top-level `provider` (OpenRouter) now set `responseProvider` on assistant messages, and project action ledger message records carry it as `upstreamProvider`, so benchmark runs can prove they stayed on the pinned host.
 
 ### Changed
 
-- Ling Code now uses `.ling` configuration directories and `LING_CODING_AGENT_*` environment overrides. See `LING.md` for migration and endpoint setup.
+- Bling Code now uses the `bling` executable, the `blingcode` package name, `.bling` configuration directories, and `BLING_CODING_AGENT_*` environment overrides. See `LING.md` for migration and endpoint setup.
+- Ling is now served through the built-in OpenRouter provider by default. `bling configure` no longer requires `--base-url`: `--profile 3.1` (default), `3.0`, or `3.0-vl` selects `openrouter/inclusionai/ling-*` and stores the vendor sampling as a `models.json` override. `--base-url` still configures a self-hosted endpoint. With an OpenRouter credential and no saved default, Ling 3.1 Flash is selected ahead of other providers' defaults. Each profile pins one OpenRouter upstream without fallbacks (Novita for 3.1 and 3.0, DeepInfra for 3.0 VL); `--upstream <slug>` selects another.
+- `bling doctor` now checks the OpenRouter credential (including a misspelled `OPEN_ROUTER_API_KEY`), the saved Ling default against the model catalog, the sampling override, and the upstream pin. The no-fallback rule for Ling defaults and sessions now covers OpenRouter Ling models.
 - `pi update` for installs from the pi.dev installer no longer passes `--min-release-age=0` to `npm ci`. The release lockfile pins every package, so the flag had no effect, and security scanners that block it stopped the update ([#11262](https://github.com/earendil-works/pi/issues/11262))
 - `/model` and `/scoped-models` now show a model's name next to its ID when the name adds words the ID lacks, such as a renamed `models.json` override ([#5916](https://github.com/earendil-works/pi/issues/5916), [#11347](https://github.com/earendil-works/pi/pull/11347))
+- Bling no longer contacts pi.dev by default. The model catalog overlay, startup update check, and install telemetry are off; set `BLING_REMOTE_CATALOG=1` or `BLING_UPDATE_CHECK=1` to opt in. `bling update --self` now checks the npm registry for `blingcode` and can only install `blingcode`.
 
 ### Fixed
 
 - Ling session restore no longer falls through to another provider or Ling generation when the session's model is unavailable; switching models on resume still requires an explicit override.
 - Compaction and branch summarization now reject blank or thinking-only responses instead of persisting an empty session checkpoint.
-- `ling configure` now rejects profile/model-ID generation mismatches, validates endpoint URLs and token-limit relationships, writes `models.json` atomically, and reports settings persistence failures instead of claiming complete success.
+- `bling configure` now rejects profile/model-ID generation mismatches, validates endpoint URLs and token-limit relationships, writes `models.json` atomically, and reports settings persistence failures instead of claiming complete success.
 - Learning reviews now bound memory and skill snapshots as well as actions, serialize concurrent runs, persist foreground proposal evidence, cover additional credential shapes, and provide explicit cursor skip/reset recovery; project memory also repairs weakened learning ignore rules.
 - Learning state now recovers locks left by dead processes, serializes cross-process action replay and memory/proposal/benchmark-definition mutations, rejects memory prompt-section breakouts and invalid hand-edited memory, and refreshes external memory edits before injection; benchmark timeouts force-kill children that ignore SIGTERM.
 - Malformed improvement-proposal JSON now produces a sanitized error instead of exposing parser excerpts from provider output.

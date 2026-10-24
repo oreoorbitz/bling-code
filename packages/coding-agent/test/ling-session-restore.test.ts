@@ -20,7 +20,7 @@ describe("Ling session model restore", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	async function setup() {
+	async function setup(sessionModel = { provider: "ling", model: "Ling-3.1-flash" }) {
 		const modelRuntime = await ModelRuntime.create({
 			credentials: AuthStorage.inMemory(),
 			modelsStore: new InMemoryModelsStore(),
@@ -34,8 +34,7 @@ describe("Ling session model restore", () => {
 		sessionManager.appendMessage({
 			...fauxAssistantMessage("previous Ling answer"),
 			api: "openai-completions",
-			provider: "ling",
-			model: "Ling-3.1-flash",
+			...sessionModel,
 		});
 		return { modelRuntime, sessionManager };
 	}
@@ -54,6 +53,24 @@ describe("Ling session model restore", () => {
 		expect(session.model?.provider).not.toBe("faux");
 		expect(modelFallbackMessage).toContain("Could not restore model ling/Ling-3.1-flash");
 		expect(modelFallbackMessage).not.toContain("faux/fallback");
+	});
+
+	it("does not fall through when an OpenRouter Ling session is unauthenticated", async () => {
+		const { modelRuntime, sessionManager } = await setup({
+			provider: "openrouter",
+			model: "inclusionai/ling-3.1-flash",
+		});
+		const { session, modelFallbackMessage } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRuntime,
+			sessionManager,
+			resourceLoader: createTestResourceLoader(),
+		});
+		onTestFinished(() => session.dispose());
+
+		expect(session.model?.provider).not.toBe("faux");
+		expect(modelFallbackMessage).toContain("Could not restore model openrouter/inclusionai/ling-3.1-flash");
 	});
 
 	it("allows an explicit non-Ling override on resume", async () => {

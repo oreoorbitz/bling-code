@@ -59,6 +59,12 @@ This replaces `bash` with `powershell` and enables `grep`: `["-bash", "+powershe
 
 CLI tool options override this setting for one invocation. `--tools` with only `+name` and `-name` entries changes the resolved `defaultTools` selection instead, for example `pi --tools +codemode`. On `/reload`, these entries apply to the reloaded setting too, so a tool removed with `-name` stays removed. See [Command Line](cli.md#tools).
 
+## Harness
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `harness.profile` | `"bling"` \| `"stock"` | `"bling"` | `bling` keeps Bling Code's prompt additions (strong-solver and oracle-gate disciplines, Bling identity, extra rules) and curated project memory. `stock` reproduces upstream Pi's system prompt and injects no curated memory or `project_memory` tool, so a run can serve as the control when benchmarking harness changes. Model selection and sampling are unchanged. The `--harness` flag overrides it for one run. |
+
 ## Sessions and context
 
 | Setting | Type | Default | Description |
@@ -167,6 +173,6 @@ The built-in extensions are named `builtin:mcp`, `builtin:llama.cpp`, `builtin:c
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `collapseChangelog` | boolean | `false` | Show a condensed changelog after an update. |
-| `enableInstallTelemetry` | boolean | `true` | Enable anonymous install/update reporting and selected provider attribution headers. Does not control update checks. |
+| `enableInstallTelemetry` | boolean | `false` | Enable anonymous install/update reporting and selected provider attribution headers. Does not control update checks. |
 | `enableAnalytics` | boolean | `false` | Opt in to analytics data sharing. Currently used only by the experimental first-run setup. |
 | `warnings.anthropicExtraUsage` | boolean | `true` | Warn when Anthropic subscription authentication may use paid extra usage. |

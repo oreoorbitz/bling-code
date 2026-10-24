@@ -29,7 +29,7 @@ export const SETTINGS_DEFAULTS = {
 	quietStartup: false,
 	defaultProjectTrust: "ask",
 	collapseChangelog: false,
-	enableInstallTelemetry: true,
+	enableInstallTelemetry: false,
 	enableAnalytics: false,
 	enableSkillCommands: true,
 	terminal: {
@@ -73,6 +73,9 @@ export const SETTINGS_DEFAULTS = {
 			thresholdChars: 32000,
 			minProbability: 0.55,
 		},
+	},
+	harness: {
+		profile: "bling",
 	},
 	cacheWarming: "streaming",
 	tuiMode: "fullscreen",

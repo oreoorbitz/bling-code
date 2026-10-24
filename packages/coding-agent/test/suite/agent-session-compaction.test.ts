@@ -490,6 +490,7 @@ describe("AgentSession compaction characterization", () => {
 			const observedSettings: unknown[] = [];
 			const harness = await createHarness({
 				models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
+				systemPrompt: "Test.",
 				settings: {
 					compaction: modelOverride
 						? {

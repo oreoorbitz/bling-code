@@ -8,7 +8,7 @@ import {
 	InteractiveMode,
 	SessionManager,
 	createAgentSessionFromServices,
-} from "@earendil-works/pi-coding-agent";
+} from "blingcode";
 import { createJudge, describeEval } from "vitest-evals";
 import { createPiDocumentationEvalHarness, type PiCodingAgentInput } from "../src/harness.ts";
 

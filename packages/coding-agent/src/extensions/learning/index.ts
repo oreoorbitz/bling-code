@@ -21,6 +21,7 @@ function readLearningSettings(pi: ExtensionAPI) {
 		enabled: settings?.enabled !== false,
 		actionLog: settings?.actionLog !== false,
 		memory: settings?.memory !== false,
+		harnessProfile: pi.getSettings().harness?.profile === "stock" ? ("stock" as const) : ("bling" as const),
 		decider: settings?.decider,
 		review: settings?.review,
 	};
@@ -55,6 +56,13 @@ export function createProjectLearningExtension(): ExtensionFactory {
 
 		pi.on("before_agent_start", async (event, ctx) => {
 			const settings = readLearningSettings(pi);
+			if (settings.harnessProfile === "stock") {
+				// Control arm: no curated memory in the prompt and no project_memory tool declaration.
+				event.systemPromptOptions.selectedTools = event.systemPromptOptions.selectedTools.filter(
+					(name) => name !== "project_memory",
+				);
+				return;
+			}
 			if (!settings.enabled || !settings.memory || !ctx.isProjectTrusted()) return;
 			const rendered = renderProjectMemory(await (await getMemory(ctx.cwd)).list());
 			if (rendered) event.systemPromptOptions.sections.project_memory = rendered;
@@ -64,7 +72,12 @@ export function createProjectLearningExtension(): ExtensionFactory {
 			const settings = readLearningSettings(pi);
 			if (!settings.enabled || !settings.actionLog) return;
 			const store = await getActions(ctx.cwd);
-			const action = createMessageAction(ctx.cwd, ctx.sessionManager.getSessionId(), event.message);
+			const action = createMessageAction(
+				ctx.cwd,
+				ctx.sessionManager.getSessionId(),
+				event.message,
+				settings.harnessProfile,
+			);
 			await store.append(action);
 			if (event.message.role === "assistant") {
 				for (const part of event.message.content) {
@@ -93,6 +106,7 @@ export function createProjectLearningExtension(): ExtensionFactory {
 					args,
 					result: event.result,
 					isError: event.isError,
+					harnessProfile: settings.harnessProfile,
 					...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
 					...(parentActionId === undefined ? {} : { parentActionId }),
 					...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),

@@ -22,17 +22,17 @@ export function printLingLearningHelp(): void {
 	console.log(`Project-local learning and review
 
 Usage:
-  ling learning status
-  ling learning actions [query]
-  ling learning memory [add <text> | remove <id>]
-  ling learning list
-  ling learning show <proposal-id>
-  ling learning approve <proposal-id>
-  ling learning reject <proposal-id>
-  ling learning cursor <reset|skip>
-  ling improve [--decider] [--decider-shadow] [--model <provider/model>]
+  bling learning status
+  bling learning actions [query]
+  bling learning memory [add <text> | remove <id>]
+  bling learning list
+  bling learning show <proposal-id>
+  bling learning approve <proposal-id>
+  bling learning reject <proposal-id>
+  bling learning cursor <reset|skip>
+  bling improve [--decider] [--decider-shadow] [--model <provider/model>]
 
-Actions and provider-returned reasoning stay in .ling/learning. Memory and skill
+Actions and provider-returned reasoning stay in .bling/learning. Memory and skill
 proposals require explicit approval. --decider enables OpenRouter Decider only
 when review state exceeds its threshold; --decider-shadow records the gate but
 still runs Ling for calibration. OPENROUTER_API_KEY stays external.`);
@@ -97,7 +97,7 @@ async function runImprove(args: string[], cwd: string, agentDir: string): Promis
 		);
 	} else {
 		console.log(`${result.status === "cached" ? "Reused" : "Created"} ${result.reviewId}`);
-		console.log(`${result.proposals.length} proposal(s); inspect with: ling learning list`);
+		console.log(`${result.proposals.length} proposal(s); inspect with: bling learning list`);
 		for (const proposal of result.proposals)
 			console.log(`${proposal.id} ${proposal.kind}/${proposal.operation}: ${proposal.title}`);
 	}
@@ -132,11 +132,11 @@ export async function runLingLearningCommand(
 			const [operation, ...content] = rest;
 			if (operation === "add") {
 				const text = content.join(" ").trim();
-				if (!text) throw new Error("ling learning memory add requires text");
+				if (!text) throw new Error("bling learning memory add requires text");
 				const { entry, duplicate } = await store.add(text, "user");
 				console.log(`${duplicate ? "Already present" : "Added"} ${entry.id}`);
 			} else if (operation === "remove") {
-				if (!content[0]) throw new Error("ling learning memory remove requires an ID");
+				if (!content[0]) throw new Error("bling learning memory remove requires an ID");
 				console.log(`Removed ${(await store.remove(content[0])).id}`);
 			} else {
 				console.log(renderProjectMemory(await store.list()) || "Project memory is empty.");
@@ -162,7 +162,7 @@ export async function runLingLearningCommand(
 						: "No new project actions to skip.",
 				);
 			} else {
-				throw new Error("ling learning cursor requires reset or skip");
+				throw new Error("bling learning cursor requires reset or skip");
 			}
 			return true;
 		}
@@ -180,12 +180,12 @@ export async function runLingLearningCommand(
 			return true;
 		}
 		if (subcommand === "show") {
-			if (!rest[0]) throw new Error("ling learning show requires a proposal ID");
+			if (!rest[0]) throw new Error("bling learning show requires a proposal ID");
 			console.log(JSON.stringify(proposalStore.get(rest[0]), null, 2));
 			return true;
 		}
 		if (subcommand === "approve" || subcommand === "reject") {
-			if (!rest[0]) throw new Error(`ling learning ${subcommand} requires a proposal ID`);
+			if (!rest[0]) throw new Error(`bling learning ${subcommand} requires a proposal ID`);
 			const proposal =
 				subcommand === "approve" ? await proposalStore.approve(rest[0]) : await proposalStore.reject(rest[0]);
 			console.log(`${proposal.status}: ${proposal.id}`);

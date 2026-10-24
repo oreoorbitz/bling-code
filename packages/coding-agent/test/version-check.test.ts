@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PACKAGE_NAME } from "../src/config.ts";
 import {
 	checkForNewPiVersion,
 	comparePackageVersions,
@@ -13,10 +14,12 @@ const originalSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
 
 beforeEach(() => {
 	allowNetwork();
+	vi.stubEnv("BLING_UPDATE_CHECK", "1");
 });
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.unstubAllEnvs();
 	if (originalSkipVersionCheck === undefined) {
 		delete process.env.PI_SKIP_VERSION_CHECK;
 	} else {
@@ -42,13 +45,13 @@ describe("version checks", () => {
 		await expect(checkForNewPiVersion("1.2.2")).resolves.toEqual({ version: "1.2.3" });
 	});
 
-	it("uses the pi.dev version check api with a pi user agent", async () => {
+	it("uses the npm registry latest endpoint with a pi user agent", async () => {
 		const fetchMock = vi.fn(async () => Response.json({ version: "1.2.4" }));
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
 		expect(fetchMock).toHaveBeenCalledWith(
-			"https://pi.dev/api/latest-version",
+			`https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/latest`,
 			expect.objectContaining({
 				headers: expect.objectContaining({
 					"User-Agent": expect.stringMatching(/^pi\/1\.2\.3 /),
@@ -89,26 +92,36 @@ describe("version checks", () => {
 		expect(formatVersionCheckError(error)).toBe("fetch failed (ETIMEDOUT, ENETUNREACH)");
 	});
 
-	it("returns the active package metadata from the version check api", async () => {
+	it("trusts only the version from the registry response", async () => {
 		const fetchMock = vi.fn(async () =>
 			Response.json({
 				packageName: "@new-scope/pi",
-				version: "1.2.4",
+				note: "**Read this**",
+				version: " 1.2.4 ",
 			}),
 		);
 		vi.stubGlobal("fetch", fetchMock);
 
-		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({
-			packageName: "@new-scope/pi",
-			version: "1.2.4",
-		});
+		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({ version: "1.2.4" });
 	});
 
-	it("returns update notes from the version check api", async () => {
-		const fetchMock = vi.fn(async () => Response.json({ note: " **Read this** ", version: "1.2.4" }));
+	it("reports an unpublished package clearly", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("not found", { status: 404 })),
+		);
+
+		await expect(getLatestPiRelease("1.2.3")).rejects.toThrow(`${PACKAGE_NAME} is not published on npm`);
+		await expect(checkForNewPiVersion("1.2.3")).resolves.toBeUndefined();
+	});
+
+	it("does not run the automatic check unless BLING_UPDATE_CHECK is set", async () => {
+		vi.stubEnv("BLING_UPDATE_CHECK", undefined);
+		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
 
-		await expect(getLatestPiRelease("1.2.3")).resolves.toEqual({ note: "**Read this**", version: "1.2.4" });
+		await expect(checkForNewPiVersion("1.2.2")).resolves.toBeUndefined();
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("skips automatic api calls when version checks are disabled", async () => {

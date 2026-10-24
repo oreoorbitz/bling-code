@@ -77,7 +77,7 @@ describe("runLingLearningCommand", () => {
 		expect(result.stdout).toBe("");
 		expect(result.stderr).toBe("");
 		expect(result.exitCode).toBeUndefined();
-		expect(existsSync(join(cwd, ".ling"))).toBe(false);
+		expect(existsSync(join(cwd, ".bling"))).toBe(false);
 	});
 
 	it("prints help for learning --help and improve -h without touching the project", async () => {
@@ -89,11 +89,11 @@ describe("runLingLearningCommand", () => {
 			const result = await runCli(args, cwd, agentDir);
 			expect(result.handled).toBe(true);
 			expect(result.exitCode).toBeUndefined();
-			expect(result.stdout).toContain("ling learning status");
-			expect(result.stdout).toContain("ling learning approve <proposal-id>");
-			expect(result.stdout).toContain("ling improve [--decider]");
+			expect(result.stdout).toContain("bling learning status");
+			expect(result.stdout).toContain("bling learning approve <proposal-id>");
+			expect(result.stdout).toContain("bling improve [--decider]");
 		}
-		expect(existsSync(join(cwd, ".ling"))).toBe(false);
+		expect(existsSync(join(cwd, ".bling"))).toBe(false);
 	});
 
 	it("reports an empty status for a fresh project without creating state", async () => {
@@ -102,12 +102,12 @@ describe("runLingLearningCommand", () => {
 			const result = await runCli(args, cwd, agentDir);
 			expect(result.handled).toBe(true);
 			expect(result.exitCode).toBeUndefined();
-			expect(result.stdout).toContain(`Project learning directory: ${join(cwd, ".ling", "learning")}`);
+			expect(result.stdout).toContain(`Project learning directory: ${join(cwd, ".bling", "learning")}`);
 			expect(result.stdout).toContain("Actions: 0");
 			expect(result.stdout).toContain("Memories: 0");
 			expect(result.stdout).toContain("Pending proposals: 0");
 		}
-		expect(existsSync(join(cwd, ".ling"))).toBe(false);
+		expect(existsSync(join(cwd, ".bling"))).toBe(false);
 	});
 
 	it("rejects unknown learning subcommands with an error and no writes", async () => {
@@ -116,7 +116,7 @@ describe("runLingLearningCommand", () => {
 		expect(result.handled).toBe(true);
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain("Unknown learning subcommand: frobnicate");
-		expect(existsSync(join(cwd, ".ling"))).toBe(false);
+		expect(existsSync(join(cwd, ".bling"))).toBe(false);
 	});
 
 	describe("actions", () => {
@@ -201,17 +201,17 @@ describe("runLingLearningCommand", () => {
 
 			const noText = await runCli(["learning", "memory", "add"], cwd, agentDir);
 			expect(noText.exitCode).toBe(1);
-			expect(noText.stderr).toContain("ling learning memory add requires text");
+			expect(noText.stderr).toContain("bling learning memory add requires text");
 
 			const noId = await runCli(["learning", "memory", "remove"], cwd, agentDir);
 			expect(noId.exitCode).toBe(1);
-			expect(noId.stderr).toContain("ling learning memory remove requires an ID");
+			expect(noId.stderr).toContain("bling learning memory remove requires an ID");
 
 			const unknown = await runCli(["learning", "memory", "remove", "mem_doesnotexist"], cwd, agentDir);
 			expect(unknown.exitCode).toBe(1);
 			expect(unknown.stderr).toContain('no project memory entry matches "mem_doesnotexist"');
 
-			expect(existsSync(join(cwd, ".ling"))).toBe(false);
+			expect(existsSync(join(cwd, ".bling"))).toBe(false);
 		});
 	});
 
@@ -227,7 +227,7 @@ describe("runLingLearningCommand", () => {
 				expect(result.exitCode).toBeUndefined();
 				expect(result.stdout).toContain("No proposals.");
 			}
-			expect(existsSync(join(cwd, ".ling"))).toBe(false);
+			expect(existsSync(join(cwd, ".bling"))).toBe(false);
 		});
 
 		it("lists and shows staged proposals by id and unique prefix", async () => {
@@ -332,7 +332,7 @@ describe("runLingLearningCommand", () => {
 			expect(approved.stdout).toContain(`applied: ${proposal.id}`);
 			expect(approved.stdout).toContain("Restart or /reload sessions to load the skill.");
 
-			const skillPath = join(cwd, ".ling", "skills", "test-skill", "SKILL.md");
+			const skillPath = join(cwd, ".bling", "skills", "test-skill", "SKILL.md");
 			expect(readFileSync(skillPath, "utf-8")).toBe(content);
 			const reopened = await ImprovementProposalStore.open(cwd);
 			expect(reopened.get(proposal.id).status).toBe("applied");
@@ -343,15 +343,15 @@ describe("runLingLearningCommand", () => {
 
 			const showNoId = await runCli(["learning", "show"], cwd, agentDir);
 			expect(showNoId.exitCode).toBe(1);
-			expect(showNoId.stderr).toContain("ling learning show requires a proposal ID");
+			expect(showNoId.stderr).toContain("bling learning show requires a proposal ID");
 
 			const approveNoId = await runCli(["learning", "approve"], cwd, agentDir);
 			expect(approveNoId.exitCode).toBe(1);
-			expect(approveNoId.stderr).toContain("ling learning approve requires a proposal ID");
+			expect(approveNoId.stderr).toContain("bling learning approve requires a proposal ID");
 
 			const rejectNoId = await runCli(["learning", "reject"], cwd, agentDir);
 			expect(rejectNoId.exitCode).toBe(1);
-			expect(rejectNoId.stderr).toContain("ling learning reject requires a proposal ID");
+			expect(rejectNoId.stderr).toContain("bling learning reject requires a proposal ID");
 
 			const showUnknown = await runCli(["learning", "show", "prop_doesnotexist"], cwd, agentDir);
 			expect(showUnknown.exitCode).toBe(1);
@@ -361,7 +361,7 @@ describe("runLingLearningCommand", () => {
 			expect(approveUnknown.exitCode).toBe(1);
 			expect(approveUnknown.stderr).toContain("Proposal not found");
 
-			expect(existsSync(join(cwd, ".ling"))).toBe(false);
+			expect(existsSync(join(cwd, ".bling"))).toBe(false);
 		});
 	});
 
@@ -410,7 +410,7 @@ describe("runLingLearningCommand", () => {
 				if (originalOffline === undefined) delete process.env.PI_OFFLINE;
 				else process.env.PI_OFFLINE = originalOffline;
 			}
-			expect(existsSync(join(cwd, ".ling"))).toBe(false);
+			expect(existsSync(join(cwd, ".bling"))).toBe(false);
 		});
 	});
 });

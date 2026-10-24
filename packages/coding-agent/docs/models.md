@@ -12,7 +12,7 @@ For a built-in provider, start with `/login`, then choose a model with `/model`.
 | An OpenAI-, Anthropic-, or Google-compatible endpoint | Add it to `models.json` |
 | A provider with a custom protocol or authentication flow | Build or install a provider extension |
 
-Browse the [model catalog](https://pi.dev/models) for current providers, model IDs, capabilities, context limits, and pricing. Pi starts with its bundled catalog and can overlay newer catalog data from pi.dev. Cached catalog data remains available offline; run `pi update --models` to force a refresh.
+Browse the [model catalog](https://pi.dev/models) for current providers, model IDs, capabilities, context limits, and pricing. Bling uses its bundled catalog and makes no request to pi.dev by default. Set `BLING_REMOTE_CATALOG=1` to overlay newer catalog data from pi.dev; with it set, `bling update --models` forces a refresh.
 
 ## Authenticate
 

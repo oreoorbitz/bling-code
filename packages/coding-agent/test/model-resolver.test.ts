@@ -825,6 +825,41 @@ describe("default model selection", () => {
 		expect(result.model).toBeUndefined();
 	});
 
+	test("findInitialModel does not replace an unauthenticated OpenRouter Ling default", async () => {
+		const lingModel = getModel("openrouter", "inclusionai/ling-3.1-flash")!;
+		const otherModel = getModel("anthropic", "claude-sonnet-4-5")!;
+		const registry = {
+			getModel: (provider: string, modelId: string) =>
+				provider === lingModel.provider && modelId === lingModel.id ? lingModel : undefined,
+			hasConfiguredAuth: (provider: string) => provider === "anthropic",
+			getAvailableSnapshot: () => [otherModel],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
+
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: "openrouter",
+			defaultModelId: lingModel.id,
+			modelRuntime: registry,
+		});
+
+		expect(result.model).toBeUndefined();
+	});
+
+	test("findInitialModel prefers Ling 3.1 Flash on OpenRouter when no default is saved", async () => {
+		const lingModel = getModel("openrouter", "inclusionai/ling-3.1-flash")!;
+		const anthropicDefault = getModel("anthropic", "claude-opus-4-8")!;
+		const registry = {
+			getModel: () => undefined,
+			hasConfiguredAuth: () => true,
+			getAvailableSnapshot: () => [anthropicDefault, lingModel],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
+
+		const result = await findInitialModel({ scopedModels: [], isContinuing: false, modelRuntime: registry });
+
+		expect(result.model).toBe(lingModel);
+	});
+
 	describe("persisted default model scoping", () => {
 		const tempDirs: string[] = [];
 		const sonnet = getModel("anthropic", "claude-sonnet-4-5")!;

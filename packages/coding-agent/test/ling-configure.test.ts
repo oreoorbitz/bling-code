@@ -1,13 +1,17 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	configureLing,
 	LING_DEFAULT_CONTEXT_WINDOW,
 	LING_DEFAULT_MAX_TOKENS,
+	type LingEndpointConfigureOptions,
 	parseLingConfigureArgs,
 } from "../src/cli/ling-configure.ts";
+import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 
 const tempDirs: string[] = [];
@@ -22,14 +26,44 @@ function parse(args: string[]) {
 	return result;
 }
 
+function parseEndpoint(args: string[]): LingEndpointConfigureOptions {
+	const result = parse(args);
+	if (result.target !== "endpoint") throw new Error("Expected endpoint options");
+	return result;
+}
+
 describe("parseLingConfigureArgs", () => {
-	test("requires an explicit endpoint", () => {
-		expect(() => parse([])).toThrow("--base-url is required");
+	test("defaults to Ling 3.1 Flash on OpenRouter", () => {
+		expect(parse([])).toEqual({ target: "openrouter", profile: "3.1", upstream: "novita" });
 	});
 
-	test("uses the conservative Ling 3.1 profile", () => {
+	test("selects Ling 3.0 and 3.0 VL profiles explicitly", () => {
+		expect(parse(["--profile", "3.0"])).toEqual({ target: "openrouter", profile: "3.0", upstream: "novita" });
+		expect(parse(["--profile", "3.0-vl"])).toEqual({
+			target: "openrouter",
+			profile: "3.0-vl",
+			upstream: "deepinfra",
+		});
+		expect(() => parse(["--profile", "3.0-tiny"])).toThrow("--profile must be 3.1, 3.0, or 3.0-vl");
+	});
+
+	test("pins an explicit OpenRouter upstream and rejects it for a self-hosted endpoint", () => {
+		expect(parse(["--upstream", "deepinfra/fp4"])).toMatchObject({ upstream: "deepinfra/fp4" });
+		expect(() => parse(["--upstream", "Novita AI"])).toThrow("--upstream must be an OpenRouter provider slug");
+		expect(() => parse(["--base-url", "http://localhost:30000/v1", "--upstream", "novita"])).toThrow(
+			"--upstream applies only to OpenRouter",
+		);
+	});
+
+	test("rejects self-hosted endpoint options without --base-url", () => {
+		expect(() => parse(["--dialect", "chat-template"])).toThrow("--dialect applies only to a self-hosted endpoint");
+		expect(() => parse(["--force"])).toThrow("--force applies only to a self-hosted endpoint");
+	});
+
+	test("uses the conservative Ling 3.1 profile for a self-hosted endpoint", () => {
 		const options = parse(["--base-url", "http://localhost:30000/v1/"]);
 		expect(options).toEqual({
+			target: "endpoint",
 			baseUrl: "http://localhost:30000/v1",
 			profile: "3.1",
 			modelId: "Ling-3.1-flash",
@@ -41,8 +75,8 @@ describe("parseLingConfigureArgs", () => {
 		});
 	});
 
-	test("keeps Ling 3.0 as an explicit profile", () => {
-		const options = parse([
+	test("keeps Ling 3.0 as an explicit endpoint profile", () => {
+		const options = parseEndpoint([
 			"--base-url",
 			"https://openrouter.ai/api/v1",
 			"--profile",
@@ -65,9 +99,20 @@ describe("parseLingConfigureArgs", () => {
 		expect(() =>
 			parse(["--base-url", "http://localhost:30000/v1", "--model-id", "inclusionai/ling-3.0-flash"]),
 		).toThrow("indicates Ling 3.0 but --profile is 3.1");
-		expect(parse(["--base-url", "http://localhost:30000/v1", "--model-id", "private-deployment"]).modelId).toBe(
-			"private-deployment",
+		expect(
+			parseEndpoint(["--base-url", "http://localhost:30000/v1", "--model-id", "private-deployment"]).modelId,
+		).toBe("private-deployment");
+	});
+
+	test("rejects a vision model ID with a text profile and vice versa", () => {
+		const base = ["--base-url", "http://localhost:30000/v1"];
+		expect(() => parse([...base, "--profile", "3.0", "--model-id", "inclusionai/ling-3.0-flash-vl"])).toThrow(
+			"is a vision model but --profile is 3.0",
 		);
+		expect(() => parse([...base, "--profile", "3.0-vl", "--model-id", "inclusionai/ling-3.0-flash"])).toThrow(
+			"is not a vision model but --profile is 3.0-vl",
+		);
+		expect(parseEndpoint([...base, "--profile", "3.0-vl"]).modelId).toBe("Ling-3.0-flash-vl");
 	});
 
 	test("rejects a malformed endpoint with an actionable error", () => {
@@ -83,7 +128,80 @@ describe("parseLingConfigureArgs", () => {
 	});
 });
 
-describe("configureLing", () => {
+describe("configureLing on OpenRouter", () => {
+	test("stores vendor sampling as an override and selects the built-in Ling model", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ling-configure-openrouter-"));
+		tempDirs.push(dir);
+		const modelsPath = join(dir, "models.json");
+		await writeFile(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					existing: { baseUrl: "http://localhost:9000/v1", models: [] },
+					openrouter: {
+						headers: { "X-Title": "bling" },
+						modelOverrides: {
+							"inclusionai/ling-3.1-flash": {
+								name: "Ling (renamed)",
+								samplingParams: { temperature: 0.2 },
+								compat: { supportsStrictMode: false },
+							},
+							"other/model": { name: "Other" },
+						},
+					},
+				},
+			}),
+		);
+		const settings = SettingsManager.create(dir, dir);
+
+		const result = await configureLing(parse([]), settings, modelsPath);
+
+		expect(result).toMatchObject({ provider: "openrouter", modelId: "inclusionai/ling-3.1-flash" });
+		const config = JSON.parse(await readFile(modelsPath, "utf8"));
+		expect(config.providers.existing).toBeDefined();
+		expect(config.providers.openrouter).toEqual({
+			headers: { "X-Title": "bling" },
+			modelOverrides: {
+				"inclusionai/ling-3.1-flash": {
+					name: "Ling (renamed)",
+					samplingParams: { temperature: 1, top_p: 0.95, top_k: 20 },
+					compat: {
+						supportsStrictMode: false,
+						openRouterRouting: { only: ["novita"], allow_fallbacks: false },
+					},
+				},
+				"other/model": { name: "Other" },
+			},
+		});
+		const reloaded = SettingsManager.create(dir, dir);
+		expect(reloaded.getDefaultProvider()).toBe("openrouter");
+		expect(reloaded.getDefaultModel()).toBe("inclusionai/ling-3.1-flash");
+	});
+
+	test("applies the override to the built-in catalog model", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ling-configure-openrouter-runtime-"));
+		tempDirs.push(dir);
+		const modelsPath = join(dir, "models.json");
+
+		await configureLing(parse(["--profile", "3.0-vl"]), SettingsManager.create(dir, dir), modelsPath);
+
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath,
+			allowModelNetwork: false,
+		});
+		const model = runtime.getModel("openrouter", "inclusionai/ling-3.0-flash-vl");
+		expect(model?.input).toContain("image");
+		expect(model?.samplingParams).toEqual({ temperature: 1, top_p: 0.95, top_k: 20 });
+		expect(model?.compat).toMatchObject({
+			thinkingFormat: "openrouter",
+			openRouterRouting: { only: ["deepinfra"], allow_fallbacks: false },
+		});
+	});
+});
+
+describe("configureLing on a self-hosted endpoint", () => {
 	test("writes an externalized credential and selects the exact configured model", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "ling-configure-"));
 		tempDirs.push(dir);

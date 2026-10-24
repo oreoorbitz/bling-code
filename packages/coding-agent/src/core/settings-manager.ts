@@ -15,6 +15,7 @@ import type {
 	CompactionModelOverride,
 	DefaultProjectTrust,
 	FullscreenExitOutput,
+	HarnessProfile,
 	MermaidRenderingMode,
 	PackageSource,
 	QuietStartup,
@@ -35,6 +36,7 @@ export type {
 	CompactionSettings,
 	DefaultProjectTrust,
 	FullscreenExitOutput,
+	HarnessProfile,
 	ImageSettings,
 	MarkdownSettings,
 	MermaidRenderingMode,
@@ -274,6 +276,8 @@ export class SettingsManager {
 	private globalSettings: Settings;
 	private projectSettings: Settings;
 	private settings: Settings;
+	/** Harness override from the CLI. Re-applied after reload, trust changes, and saves so it stays sticky. */
+	private harnessOverride: Settings["harness"];
 	private projectTrusted: boolean;
 	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
 	private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
@@ -303,7 +307,7 @@ export class SettingsManager {
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
 		this.settingsPaths = settingsPaths;
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.computeEffectiveSettings();
 	}
 
 	/** Create a SettingsManager that loads from files */
@@ -484,7 +488,7 @@ export class SettingsManager {
 		if (!trusted) {
 			this.projectSettings = {};
 			this.projectSettingsLoadError = null;
-			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			this.settings = this.computeEffectiveSettings();
 			return;
 		}
 
@@ -494,7 +498,7 @@ export class SettingsManager {
 		if (projectLoad.error) {
 			this.recordError("project", projectLoad.error);
 		}
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.computeEffectiveSettings();
 	}
 
 	async reload(): Promise<void> {
@@ -522,12 +526,20 @@ export class SettingsManager {
 			this.recordError("project", projectLoad.error);
 		}
 
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.computeEffectiveSettings();
 	}
 
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
+		if (overrides.harness) {
+			this.harnessOverride = { ...this.harnessOverride, ...overrides.harness };
+		}
 		this.settings = deepMergeSettings(this.settings, overrides);
+	}
+
+	private computeEffectiveSettings(): Settings {
+		const merged = deepMergeSettings(this.globalSettings, this.projectSettings);
+		return this.harnessOverride ? deepMergeSettings(merged, { harness: this.harnessOverride }) : merged;
 	}
 
 	/** Mark a global field as modified during this session */
@@ -627,7 +639,7 @@ export class SettingsManager {
 	}
 
 	private save(): void {
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.computeEffectiveSettings();
 
 		if (this.globalSettingsLoadError) {
 			return;
@@ -645,7 +657,7 @@ export class SettingsManager {
 	private saveProjectSettings(settings: Settings): void {
 		this.assertProjectTrustedForWrite();
 		this.projectSettings = structuredClone(settings);
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = this.computeEffectiveSettings();
 
 		if (this.projectSettingsLoadError) {
 			return;
@@ -1251,6 +1263,10 @@ export class SettingsManager {
 		this.globalSettings.terminal.showTerminalProgress = enabled;
 		this.markModified("terminal", "showTerminalProgress");
 		this.save();
+	}
+
+	getHarnessProfile(): HarnessProfile {
+		return this.settings.harness?.profile === "stock" ? "stock" : SETTINGS_DEFAULTS.harness.profile;
 	}
 
 	getTuiMode(): TuiMode {

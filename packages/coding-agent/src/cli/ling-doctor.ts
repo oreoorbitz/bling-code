@@ -1,9 +1,17 @@
 import { join } from "node:path";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import chalk from "chalk";
 import { APP_NAME } from "../config.ts";
+import { readStoredCredential } from "../core/auth-storage.ts";
+import {
+	isLingModelRef,
+	LING_DEFAULT_PROFILE,
+	LING_ENDPOINT_PROVIDER_ID,
+	LING_OPENROUTER_PROVIDER_ID,
+	LING_PROFILES,
+} from "../core/ling-models.ts";
 import { ModelConfig, type ModelsJsonProvider } from "../core/model-config.ts";
 import { SettingsManager } from "../core/settings-manager.ts";
-import { LING_PROVIDER_ID } from "./ling-configure.ts";
 
 export interface LingDoctorDiagnostic {
 	level: "ok" | "warning" | "error";
@@ -21,7 +29,91 @@ function isPositiveInteger(value: number | undefined): boolean {
 	return value !== undefined && Number.isSafeInteger(value) && value > 0;
 }
 
-/** Credential-blind, offline checks for the explicitly configured Ling provider. */
+interface LingOpenRouterDoctorInput {
+	/** The openrouter entry from models.json, if any. */
+	provider?: ModelsJsonProvider;
+	defaultProvider?: string;
+	defaultModel?: string;
+	env?: Record<string, string | undefined>;
+	hasStoredCredential: boolean;
+	catalogModelIds: ReadonlySet<string>;
+}
+
+/** Credential-blind, offline checks for Ling served through the built-in OpenRouter provider. */
+export function diagnoseLingOpenRouterConfiguration(input: LingOpenRouterDoctorInput): LingDoctorDiagnostic[] {
+	const diagnostics: LingDoctorDiagnostic[] = [];
+	const add = (level: LingDoctorDiagnostic["level"], message: string): void => {
+		diagnostics.push({ level, message });
+	};
+	const defaultLingModelId = LING_PROFILES[LING_DEFAULT_PROFILE].openRouterModelId;
+
+	if (input.env?.OPENROUTER_API_KEY?.trim()) {
+		add("ok", "Credential: $OPENROUTER_API_KEY is set (value not displayed).");
+	} else if (input.hasStoredCredential) {
+		add("ok", "Credential: an OpenRouter login is stored in auth.json (value not displayed).");
+	} else {
+		const misnamed = input.env?.OPEN_ROUTER_API_KEY?.trim()
+			? " OPEN_ROUTER_API_KEY is set, but the expected name is OPENROUTER_API_KEY."
+			: "";
+		add("error", `No OpenRouter credential. Set OPENROUTER_API_KEY or run /login.${misnamed}`);
+	}
+
+	let modelId: string;
+	if (input.defaultModel && isLingModelRef(input.defaultProvider, input.defaultModel)) {
+		modelId = input.defaultModel;
+		if (!input.catalogModelIds.has(modelId)) {
+			add("error", `The saved Ling default "${modelId}" is not in the OpenRouter model catalog.`);
+		} else {
+			add("ok", `Saved default: ${LING_OPENROUTER_PROVIDER_ID}/${modelId}`);
+		}
+	} else if (!input.defaultProvider) {
+		modelId = defaultLingModelId;
+		add(
+			"warning",
+			`No saved default. ${APP_NAME} selects ${LING_OPENROUTER_PROVIDER_ID}/${modelId} when OpenRouter is authenticated; run "${APP_NAME} configure" to save it with vendor sampling.`,
+		);
+	} else {
+		add(
+			"warning",
+			`The saved default is "${input.defaultProvider}/${input.defaultModel ?? ""}", not a Ling model. Ling will not be selected implicitly.`,
+		);
+		return diagnostics;
+	}
+
+	const sampling = input.provider?.modelOverrides?.[modelId]?.samplingParams;
+	const profile = Object.values(LING_PROFILES).find((candidate) => candidate.openRouterModelId === modelId);
+	if (!sampling) {
+		add(
+			"warning",
+			`No sampling override for ${modelId}; requests use provider defaults. Run "${APP_NAME} configure".`,
+		);
+	} else {
+		add("ok", `Sampling: ${JSON.stringify(sampling)}`);
+		const recommended = profile?.samplingParams;
+		if (
+			recommended &&
+			Object.entries(recommended).some(([key, value]) => (sampling as Record<string, unknown>)[key] !== value)
+		) {
+			add("warning", `Sampling differs from the vendor recommendation ${JSON.stringify(recommended)}.`);
+		}
+	}
+
+	const routing = input.provider?.modelOverrides?.[modelId]?.compat?.openRouterRouting;
+	const pinned = routing?.only?.length ? routing.only : routing?.order;
+	if (!pinned?.length) {
+		add(
+			"warning",
+			`No upstream pin for ${modelId}; OpenRouter may split requests across hosts with different quantization. Run "${APP_NAME} configure".`,
+		);
+	} else if (routing?.allow_fallbacks !== false) {
+		add("warning", `Upstream ${pinned.join(", ")} allows fallbacks to other hosts.`);
+	} else {
+		add("ok", `Upstream: ${pinned.join(", ")} (no fallbacks)`);
+	}
+	return diagnostics;
+}
+
+/** Credential-blind, offline checks for an explicitly configured self-hosted Ling endpoint. */
 export function diagnoseLingConfiguration(input: LingDoctorInput): LingDoctorDiagnostic[] {
 	const diagnostics: LingDoctorDiagnostic[] = [];
 	const add = (level: LingDoctorDiagnostic["level"], message: string): void => {
@@ -29,7 +121,10 @@ export function diagnoseLingConfiguration(input: LingDoctorInput): LingDoctorDia
 	};
 	const provider = input.provider;
 	if (!provider) {
-		add("error", `No "${LING_PROVIDER_ID}" provider is configured. Run "${APP_NAME} configure --base-url <url>".`);
+		add(
+			"error",
+			`No "${LING_ENDPOINT_PROVIDER_ID}" provider is configured. Run "${APP_NAME} configure --base-url <url>".`,
+		);
 		return diagnostics;
 	}
 
@@ -104,12 +199,12 @@ export function diagnoseLingConfiguration(input: LingDoctorInput): LingDoctorDia
 		);
 	}
 
-	if (input.defaultProvider !== LING_PROVIDER_ID) {
+	if (input.defaultProvider !== LING_ENDPOINT_PROVIDER_ID) {
 		add(
 			"warning",
 			input.defaultProvider
-				? `The saved default provider is "${input.defaultProvider}", not "${LING_PROVIDER_ID}". Ling will not be selected implicitly.`
-				: `No saved default selects "${LING_PROVIDER_ID}". Select the model explicitly or run "${APP_NAME} configure".`,
+				? `The saved default provider is "${input.defaultProvider}", not "${LING_ENDPOINT_PROVIDER_ID}". Ling will not be selected implicitly.`
+				: `No saved default selects "${LING_ENDPOINT_PROVIDER_ID}". Select the model explicitly or run "${APP_NAME} configure".`,
 		);
 	} else if (!input.defaultModel) {
 		add("error", "The saved default selects Ling but has no model ID.");
@@ -119,7 +214,7 @@ export function diagnoseLingConfiguration(input: LingDoctorInput): LingDoctorDia
 			`The saved Ling default model "${input.defaultModel}" is not present in the provider configuration.`,
 		);
 	} else {
-		add("ok", `Saved default: ${LING_PROVIDER_ID}/${input.defaultModel}`);
+		add("ok", `Saved default: ${LING_ENDPOINT_PROVIDER_ID}/${input.defaultModel}`);
 	}
 
 	return diagnostics;
@@ -131,8 +226,10 @@ export function printLingDoctorHelp(): void {
 ${chalk.bold("Usage:")}
   ${APP_NAME} doctor
 
-Checks the configured endpoint, reasoning dialect, model limits, credential reference, and exact saved
-model selection. Credential values are never displayed and no API request is made.`);
+For OpenRouter, checks the credential, the saved Ling default against the model catalog, and the
+sampling override. For a self-hosted endpoint, checks the endpoint, reasoning dialect, model limits,
+credential reference, and exact saved model selection. Credential values are never displayed and no
+API request is made.`);
 }
 
 export async function runLingDoctorCommand(
@@ -152,14 +249,26 @@ export async function runLingDoctorCommand(
 		const modelConfig = await ModelConfig.load(modelsPath);
 		const configError = modelConfig.getError();
 		const settings = SettingsManager.create(context.cwd, context.agentDir, { projectTrusted: false });
+		const defaultProvider = settings.getDefaultProvider();
+		const defaultModel = settings.getDefaultModel();
+		const endpointProvider = modelConfig.getProvider(LING_ENDPOINT_PROVIDER_ID);
+		const checkEndpoint =
+			defaultProvider === LING_ENDPOINT_PROVIDER_ID ||
+			(endpointProvider !== undefined && !isLingModelRef(defaultProvider, defaultModel));
 		const diagnostics = configError
 			? [{ level: "error" as const, message: configError }]
-			: diagnoseLingConfiguration({
-					provider: modelConfig.getProvider(LING_PROVIDER_ID),
-					defaultProvider: settings.getDefaultProvider(),
-					defaultModel: settings.getDefaultModel(),
-					env: process.env,
-				});
+			: checkEndpoint
+				? diagnoseLingConfiguration({ provider: endpointProvider, defaultProvider, defaultModel, env: process.env })
+				: diagnoseLingOpenRouterConfiguration({
+						provider: modelConfig.getProvider(LING_OPENROUTER_PROVIDER_ID),
+						defaultProvider,
+						defaultModel,
+						env: process.env,
+						hasStoredCredential:
+							readStoredCredential(LING_OPENROUTER_PROVIDER_ID, join(context.agentDir, "auth.json")) !==
+							undefined,
+						catalogModelIds: new Set(getBuiltinModels(LING_OPENROUTER_PROVIDER_ID).map((model) => model.id)),
+					});
 		for (const diagnostic of diagnostics) {
 			const label = diagnostic.level === "ok" ? "OK" : diagnostic.level === "warning" ? "WARN" : "FAIL";
 			const color =

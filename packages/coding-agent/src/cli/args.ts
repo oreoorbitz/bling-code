@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
-import { getToolListError, type TuiMode } from "../core/settings-manager.ts";
+import { getToolListError, type HarnessProfile, type TuiMode } from "../core/settings-manager.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -49,6 +49,7 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	tuiMode?: TuiMode;
+	harness?: HarnessProfile;
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
 	messages: string[];
@@ -236,6 +237,20 @@ export function parseArgs(args: string[]): Args {
 					message: `Invalid TUI mode "${mode}". Valid values: regular, fullscreen`,
 				});
 			}
+		} else if (arg === "--harness") {
+			const profile = args[i + 1];
+			if (profile === "bling" || profile === "stock") {
+				result.harness = profile;
+				i++;
+			} else if (profile === undefined || profile.startsWith("-")) {
+				result.diagnostics.push({ type: "error", message: "--harness requires bling or stock" });
+			} else {
+				i++;
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid harness profile "${profile}". Valid values: bling, stock`,
+				});
+			}
 		} else if (arg === "--verbose") {
 			result.verbose = true;
 		} else if (arg === "--approve" || arg === "-a") {
@@ -287,7 +302,7 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [--] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
-  ${APP_NAME} configure --base-url <url> Configure an explicit Ling endpoint and model profile
+  ${APP_NAME} configure [--profile <v>]  Select Ling on OpenRouter (or --base-url for a self-hosted endpoint)
   ${APP_NAME} doctor                    Check Ling configuration offline without exposing credentials
   ${APP_NAME} improve [--decider]       Review new project actions into staged improvements
   ${APP_NAME} learning <command>        Inspect project memory, actions, and proposals
@@ -343,6 +358,7 @@ ${chalk.bold("Options:")}
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
   --tui-mode <mode>              TUI mode: fullscreen (default) or regular
+  --harness <profile>            Harness profile: bling (default) or stock (upstream Pi prompt, no curated memory)
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
   --offline                      Disable startup network operations (same as PI_OFFLINE=1)
@@ -468,7 +484,8 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
   PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
+  BLING_UPDATE_CHECK               - Enable the startup update check (npm registry) when set to 1/true/yes
+  BLING_REMOTE_CATALOG             - Fetch the pi.dev model catalog overlay when set to 1/true/yes (default: off)
   PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
 
 ${chalk.bold("Built-in Tool Names:")}

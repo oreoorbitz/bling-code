@@ -4,26 +4,28 @@ import {
 	type ProjectBenchmarkDefinition,
 	ProjectBenchmarkStore,
 } from "../core/learning/benchmarks.ts";
+import { type HarnessProfile, SettingsManager } from "../core/settings-manager.ts";
 
 export function printLingBenchmarkHelp(): void {
 	console.log(`Project-specific executable benchmarks
 
 Usage:
-  ling benchmark list
-  ling benchmark add <name> [--timeout <ms>] [--expect-exit <code>]
+  bling benchmark list
+  bling benchmark add <name> [--timeout <ms>] [--expect-exit <code>]
                   [--stdout-contains <text>] [--output-excludes <text>]
                   [--allow-env <name>] [--inherit-env] -- <command> [args...]
-  ling benchmark run <name|id>
-  ling benchmark validate <name|id>
-  ling benchmark runs [name|id]
-  ling benchmark remove <name|id>
+  bling benchmark run <name|id> [--harness <bling|stock>]
+  bling benchmark validate <name|id> [--harness <bling|stock>]
+  bling benchmark runs [name|id]
+  bling benchmark remove <name|id>
 
-Definitions live in versionable .ling/benchmarks.json. Runs execute directly without
-a shell and are appended to .ling/learning/actions.jsonl with deterministic bench_
+Definitions live in versionable .bling/benchmarks.json. Runs execute directly without
+a shell and are appended to .bling/learning/actions.jsonl with deterministic bench_
 and run_ IDs. Child environments are allowlisted by default; --allow-env adds a
 named variable and --inherit-env explicitly trusts the full caller environment.
 Validation controls can be defined in benchmarks.json. A failed oracle or integrity
-check is recorded and sets a failing command exit status.`);
+check is recorded and sets a failing command exit status. --harness labels the run with
+the harness profile arm (default: harness.profile from settings).`);
 }
 
 function parseInteger(value: string | undefined, label: string): number {
@@ -33,10 +35,10 @@ function parseInteger(value: string | undefined, label: string): number {
 
 function parseDefinition(args: string[]): ProjectBenchmarkDefinition {
 	const [name, ...rest] = args;
-	if (!name) throw new Error("ling benchmark add requires a name");
+	if (!name) throw new Error("bling benchmark add requires a name");
 	const separator = rest.indexOf("--");
 	if (separator < 0 || separator === rest.length - 1) {
-		throw new Error("ling benchmark add requires -- followed by a command");
+		throw new Error("bling benchmark add requires -- followed by a command");
 	}
 	const optionArgs = rest.slice(0, separator);
 	const [command, ...commandArgs] = rest.slice(separator + 1);
@@ -92,7 +94,30 @@ function parseDefinition(args: string[]): ProjectBenchmarkDefinition {
 	};
 }
 
-export async function runLingBenchmarkCommand(args: string[], context: { cwd: string }): Promise<boolean> {
+function extractHarness(args: string[]): { rest: string[]; harness?: HarnessProfile } {
+	const rest: string[] = [];
+	let harness: HarnessProfile | undefined;
+	for (let index = 0; index < args.length; index++) {
+		if (args[index] !== "--harness") {
+			rest.push(args[index]);
+			continue;
+		}
+		const value = args[index + 1];
+		if (value !== "bling" && value !== "stock") throw new Error("--harness requires bling or stock");
+		harness = value;
+		index++;
+	}
+	return { rest, harness };
+}
+
+function resolveProfile(context: { cwd: string; agentDir: string }): HarnessProfile {
+	return SettingsManager.create(context.cwd, context.agentDir).getHarnessProfile();
+}
+
+export async function runLingBenchmarkCommand(
+	args: string[],
+	context: { cwd: string; agentDir: string },
+): Promise<boolean> {
 	if (args[0] !== "benchmark") return false;
 	if (args.includes("--help") || args.includes("-h")) {
 		printLingBenchmarkHelp();
@@ -109,7 +134,7 @@ export async function runLingBenchmarkCommand(args: string[], context: { cwd: st
 				);
 			}
 			if (benchmarks.length === 0)
-				console.log("No project benchmarks. Add one with: ling benchmark add <name> -- <command>");
+				console.log("No project benchmarks. Add one with: bling benchmark add <name> -- <command>");
 			return true;
 		}
 		if (subcommand === "add") {
@@ -120,13 +145,14 @@ export async function runLingBenchmarkCommand(args: string[], context: { cwd: st
 			return true;
 		}
 		if (subcommand === "remove") {
-			if (!rest[0]) throw new Error("ling benchmark remove requires a name or ID");
+			if (!rest[0]) throw new Error("bling benchmark remove requires a name or ID");
 			console.log(`Removed ${(await store.remove(rest[0])).name}`);
 			return true;
 		}
 		if (subcommand === "run") {
-			if (!rest[0]) throw new Error("ling benchmark run requires a name or ID");
-			const result = await store.run(rest[0]);
+			const { rest: positional, harness } = extractHarness(rest);
+			if (!positional[0]) throw new Error("bling benchmark run requires a name or ID");
+			const result = await store.run(positional[0], { harnessProfile: harness ?? resolveProfile(context) });
 			console.log(
 				`${result.passed ? "PASS" : "FAIL"} ${result.benchmarkName} ${result.actionId} exit=${result.exitCode ?? "none"} duration=${result.durationMs}ms`,
 			);
@@ -137,8 +163,9 @@ export async function runLingBenchmarkCommand(args: string[], context: { cwd: st
 			return true;
 		}
 		if (subcommand === "validate") {
-			if (!rest[0]) throw new Error("ling benchmark validate requires a name or ID");
-			const result = await store.validate(rest[0]);
+			const { rest: positional, harness } = extractHarness(rest);
+			if (!positional[0]) throw new Error("bling benchmark validate requires a name or ID");
+			const result = await store.validate(positional[0], { harnessProfile: harness ?? resolveProfile(context) });
 			console.log(
 				`${result.passed ? "VALID" : "INVALID"} ${result.benchmark.name} positive=${result.positive.actionId} negative=${result.negative.actionId}`,
 			);
@@ -157,7 +184,7 @@ export async function runLingBenchmarkCommand(args: string[], context: { cwd: st
 			for (const action of benchmarks.slice(-20).reverse()) {
 				if (action.kind === "benchmark") {
 					console.log(
-						`${action.actionId}\t${action.passed ? "PASS" : "FAIL"}\t${action.benchmarkName}\t${action.durationMs}ms\t${new Date(action.startedAt).toISOString()}`,
+						`${action.actionId}\t${action.passed ? "PASS" : "FAIL"}\t${action.benchmarkName}\t${action.durationMs}ms\t${new Date(action.startedAt).toISOString()}\t${action.harnessProfile ?? "unrecorded"}`,
 					);
 				}
 			}

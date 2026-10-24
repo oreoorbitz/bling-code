@@ -12,6 +12,7 @@ import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { CONFIG_DIR_NAME } from "../../config.ts";
+import type { HarnessProfile } from "../settings-manager.ts";
 import { withFileLock } from "./file-lock.ts";
 
 /** Directory inside the project config dir that holds all learning state. */
@@ -181,8 +182,11 @@ export interface LearningMessageAction {
 	sessionId: string;
 	kind: "message";
 	timestamp: number;
+	/** Upstream host that served an assistant response (e.g. OpenRouter "Novita"), when reported. */
+	upstreamProvider?: string;
 	/** Sanitized message as recorded; credential-shaped fields are redacted. */
 	message: AgentMessage;
+	harnessProfile?: HarnessProfile;
 }
 
 export interface LearningToolAction {
@@ -200,6 +204,7 @@ export interface LearningToolAction {
 	parentToolCallId?: string;
 	parentActionId?: string;
 	durationMs?: number;
+	harnessProfile?: HarnessProfile;
 }
 
 export interface BenchmarkOracleCheckResult {
@@ -230,6 +235,7 @@ export interface LearningBenchmarkActionInput {
 	definitionFileHashBefore?: string;
 	definitionFileHashAfter?: string;
 	integrityPassed?: boolean;
+	harnessProfile?: HarnessProfile;
 }
 
 export interface LearningBenchmarkAction extends LearningBenchmarkActionInput {
@@ -272,6 +278,7 @@ export interface LearningToolActionInput {
 	durationMs?: number;
 	/** Wall-clock record time; excluded from the action ID. Defaults to Date.now(). */
 	timestamp?: number;
+	harnessProfile?: HarnessProfile;
 }
 
 function messageTimestamp(message: AgentMessage): number {
@@ -305,8 +312,19 @@ function messageIdentity(sessionId: string, message: AgentMessage): Record<strin
  * IDs, so identical content at distinct timestamps is distinct while replaying the same
  * transcript yields the same IDs.
  */
-export function createMessageAction(cwd: string, sessionId: string, message: AgentMessage): LearningMessageAction {
+export function createMessageAction(
+	cwd: string,
+	sessionId: string,
+	message: AgentMessage,
+	harnessProfile?: HarnessProfile,
+): LearningMessageAction {
 	const sanitized = redactSensitive(message) as AgentMessage;
+	const upstreamProvider =
+		sanitized.role === "assistant" &&
+		typeof sanitized.responseProvider === "string" &&
+		sanitized.responseProvider.length > 0
+			? sanitized.responseProvider
+			: undefined;
 	return {
 		version: 1,
 		actionId: deterministicId("act", messageIdentity(sessionId, sanitized)),
@@ -314,7 +332,9 @@ export function createMessageAction(cwd: string, sessionId: string, message: Age
 		sessionId,
 		kind: "message",
 		timestamp: messageTimestamp(message),
+		...(upstreamProvider === undefined ? {} : { upstreamProvider }),
 		message: sanitized,
+		...(harnessProfile === undefined ? {} : { harnessProfile }),
 	};
 }
 
@@ -346,6 +366,7 @@ export function createToolAction(cwd: string, sessionId: string, event: Learning
 	if (event.parentToolCallId !== undefined) record.parentToolCallId = event.parentToolCallId;
 	if (event.parentActionId !== undefined) record.parentActionId = event.parentActionId;
 	if (event.durationMs !== undefined) record.durationMs = event.durationMs;
+	if (event.harnessProfile !== undefined) record.harnessProfile = event.harnessProfile;
 	return record;
 }
 

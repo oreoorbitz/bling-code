@@ -67,7 +67,7 @@ import {
 	classifierErrorResult,
 	imageErrorResult,
 } from "@earendil-works/pi-ai/utils/model-operations";
-import { getAgentDir } from "../config.ts";
+import { ENV_REMOTE_CATALOG, getAgentDir, isTruthyEnvFlag } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
@@ -118,6 +118,7 @@ export interface CreateModelRuntimeOptions {
 	allowModelNetwork?: boolean;
 	/** Timeout for the create-time network model refresh. */
 	modelRefreshTimeoutMs?: number;
+	/** pi.dev-style catalog origin for the remote overlay. When unset, the overlay is off unless the remote catalog env flag is set. */
 	catalogBaseUrl?: string;
 	/** Optional caller cancellation for initial cache restoration and availability checks. */
 	signal?: AbortSignal;
@@ -226,6 +227,8 @@ export class ModelRuntime implements Models {
 				? new FileModelsStore(options.modelsStorePath ?? join(dirname(modelsPath), "models-store.json"))
 				: new InMemoryCodingAgentModelsStore());
 		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
+		const catalogBaseUrl =
+			options.catalogBaseUrl ?? (isTruthyEnvFlag(process.env[ENV_REMOTE_CATALOG]) ? "https://pi.dev" : undefined);
 		const providers = builtinProviderCatalog.builtinProviders().map((provider) => {
 			if (provider.id === "radius") return provider;
 			// OpenRouter narrows the catalog to the models, limits and prices of the user's key.
@@ -233,11 +236,11 @@ export class ModelRuntime implements Models {
 				return withPersonalizedCatalog(
 					provider,
 					personalizeOpenRouterCatalog,
-					options.catalogBaseUrl,
+					catalogBaseUrl,
 					builtinModelDataGeneratedAt,
 				);
 			}
-			return withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt);
+			return withRemoteCatalog(provider, catalogBaseUrl, builtinModelDataGeneratedAt);
 		});
 		const runtime = new ModelRuntime(
 			credentials,

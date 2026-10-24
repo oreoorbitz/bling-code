@@ -1,9 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const sourceEntry = new URL("../src/models.ts", import.meta.url).href;
+
+// For the source entry the child gets no vitest aliases, so preload the workspace source resolver (@earendil-works/* to source, not unbuilt dist).
+// The package-name entry deliberately skips it: it checks the published export map and needs a built packages/ai/dist.
+const sourceResolverUrl = pathToFileURL(
+	fileURLToPath(new URL("../../coding-agent/src/experimental/source-resolver.ts", import.meta.url)),
+).href;
 
 // Install before linking the static imports, so unused barrel re-exports are checked too.
 const preload = `data:text/javascript,${encodeURIComponent(`
@@ -46,11 +52,22 @@ describe("lightweight models entry", () => {
 				assert.equal(response.stopReason, "stop");
 				assert.deepEqual(response.content, [{ type: "text", text: "OK" }]);
 			`;
-			const result = spawnSync(process.execPath, ["--import", preload, "--input-type=module", "--eval", script], {
-				cwd: packageRoot,
-				encoding: "utf8",
-				timeout: 10_000,
-			});
+			const result = spawnSync(
+				process.execPath,
+				[
+					...(entry === sourceEntry ? ["--import", sourceResolverUrl] : []),
+					"--import",
+					preload,
+					"--input-type=module",
+					"--eval",
+					script,
+				],
+				{
+					cwd: packageRoot,
+					encoding: "utf8",
+					timeout: 10_000,
+				},
+			);
 			expect(result.error).toBeUndefined();
 			expect(result.status, result.stderr).toBe(0);
 		},

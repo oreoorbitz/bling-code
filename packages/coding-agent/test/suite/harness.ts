@@ -117,6 +117,8 @@ export interface HarnessOptions {
 	allowedToolNames?: string[];
 	excludedToolNames?: string[];
 	resourceLoader?: ResourceLoader;
+	/** Replaces the default system prompt. Use it in token-budget tests so the prompt size does not matter. */
+	systemPrompt?: string;
 	extensionFactories?: Array<InlineExtension | CreateTestExtensionsResultInput>;
 	withConfiguredAuth?: boolean;
 	modelsJson?: Record<string, unknown>;
@@ -228,8 +230,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const extensionsResult = options.extensionFactories
 		? await createTestExtensionsResult(options.extensionFactories, tempDir)
 		: undefined;
+	const defaultResourceLoader = createTestResourceLoader(extensionsResult ? { extensionsResult } : undefined);
 	const resourceLoader =
-		options.resourceLoader ?? createTestResourceLoader(extensionsResult ? { extensionsResult } : undefined);
+		options.resourceLoader ??
+		(options.systemPrompt === undefined
+			? defaultResourceLoader
+			: { ...defaultResourceLoader, getSystemPrompt: () => options.systemPrompt });
 
 	const session = new AgentSession({
 		agent,

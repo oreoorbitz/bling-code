@@ -24,7 +24,7 @@ function createFixture(t, { importUndeclared = false } = {}) {
 	mkdirSync(repoRoot, { recursive: true });
 	writeFileSync(join(repoRoot, "package.json"), '{"name":"fixture","private":true}\n');
 	writePackage(
-		join(repoRoot, "packages", codingAgentName.split("/")[1]),
+		join(repoRoot, "packages", "coding-agent"),
 		{
 			name: codingAgentName,
 			version: "1.0.0",

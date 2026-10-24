@@ -204,6 +204,17 @@ describe("learning action store", () => {
 			expect(base.actionId).not.toBe(sameContentOtherModel.actionId);
 		});
 
+		test("records the upstream provider without changing the action id", () => {
+			const plain = assistantMessage("running", 10);
+			const served = { ...plain, responseProvider: "Novita" } as AgentMessage;
+			const plainAction = createMessageAction(tempDir, "s", plain);
+			const servedAction = createMessageAction(tempDir, "s", served);
+			expect(servedAction.upstreamProvider).toBe("Novita");
+			expect(servedAction.message).toMatchObject({ responseProvider: "Novita" });
+			expect("upstreamProvider" in plainAction).toBe(false);
+			expect(servedAction.actionId).toBe(plainAction.actionId);
+		});
+
 		test("tool actions exclude wall-clock time from the ID", () => {
 			const event = {
 				toolCallId: "call_1",
@@ -227,6 +238,28 @@ describe("learning action store", () => {
 			expect(first.actionId).toMatch(/^tool_[0-9a-f]{32}$/);
 			expect(first.toolCallId).toBe("call_1");
 			expect(first.isError).toBe(false);
+		});
+
+		test("harness profile is stamped without changing message or tool IDs", () => {
+			const message = userMessage("hello", 1000);
+			const bare = createMessageAction(tempDir, "session-1", message);
+			const stock = createMessageAction(tempDir, "session-1", message, "stock");
+			expect("harnessProfile" in bare).toBe(false);
+			expect(stock.harnessProfile).toBe("stock");
+			expect(stock.actionId).toBe(bare.actionId);
+
+			const event = {
+				toolCallId: "call_1",
+				toolName: "bash",
+				args: { command: "ls" },
+				result: "ok",
+				isError: false,
+			};
+			const bareTool = createToolAction(tempDir, "session-1", event);
+			const stockTool = createToolAction(tempDir, "session-1", { ...event, harnessProfile: "stock" });
+			expect("harnessProfile" in bareTool).toBe(false);
+			expect(stockTool.harnessProfile).toBe("stock");
+			expect(stockTool.actionId).toBe(bareTool.actionId);
 		});
 
 		test("action payloads are sanitized", () => {

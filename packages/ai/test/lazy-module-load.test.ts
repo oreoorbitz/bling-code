@@ -1,12 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const aiEntryUrl = new URL("../src/index.ts", import.meta.url).href;
 const compatEntryUrl = new URL("../src/compat.ts", import.meta.url).href;
 const providersAllUrl = new URL("../src/providers/all.ts", import.meta.url).href;
+
+// The probe child gets no vitest aliases; preload the workspace source resolver so @earendil-works/* resolve to source, not unbuilt dist.
+const sourceResolverUrl = pathToFileURL(
+	resolve(packageRoot, "../coding-agent/src/experimental/source-resolver.ts"),
+).href;
 
 const SDK_SPECIFIERS = ["@anthropic-ai/sdk", "openai", "@google/genai", "@aws-sdk/client-bedrock-runtime"] as const;
 
@@ -35,10 +40,14 @@ function runProbe(action: string): ProbeResult {
 		console.log(JSON.stringify({ loadedSpecifiers: [...new Set(loaded)] }));
 	`;
 
-	const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
-		cwd: packageRoot,
-		encoding: "utf8",
-	});
+	const result = spawnSync(
+		process.execPath,
+		["--import", sourceResolverUrl, "--input-type=module", "--eval", script],
+		{
+			cwd: packageRoot,
+			encoding: "utf8",
+		},
+	);
 
 	if (result.status !== 0) {
 		throw new Error(`Probe failed (exit ${result.status})\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);

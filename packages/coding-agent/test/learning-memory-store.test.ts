@@ -252,11 +252,11 @@ describe("ProjectMemoryStore", () => {
 		expect(readFileSync(ignorePath, "utf8")).toBe("*\n!.gitignore\n");
 	});
 
-	it("keeps all state under .ling/learning", async () => {
+	it("keeps all state under .bling/learning", async () => {
 		const project = makeProject();
 		const store = await ProjectMemoryStore.open(project);
 		await store.add("Scoped state.");
-		expect(store.dir).toBe(join(project, ".ling", "learning"));
+		expect(store.dir).toBe(join(project, ".bling", "learning"));
 		expect(store.memoryPath.startsWith(store.dir)).toBe(true);
 		expect(store.markdownPath.startsWith(store.dir)).toBe(true);
 	});

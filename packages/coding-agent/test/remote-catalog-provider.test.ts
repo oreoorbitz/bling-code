@@ -318,7 +318,7 @@ describe("personalized catalog provider", () => {
 		const personalize: PersonalizeCatalog = async () => {
 			throw new Error("user models request failed");
 		};
-		const provider = withPersonalizedCatalog(builtinProvider(), personalize);
+		const provider = withPersonalizedCatalog(builtinProvider(), personalize, "https://pi.dev");
 
 		await expect(refreshProvider(provider, store)).rejects.toThrow("user models request failed");
 		expect(provider.getModels().map((entry) => entry.id)).toEqual(["allowed"]);
@@ -330,7 +330,7 @@ describe("personalized catalog provider", () => {
 			throw new Error("not used offline");
 		};
 		const store = new InMemoryModelsStore();
-		const provider = withPersonalizedCatalog(builtinProvider(), personalize);
+		const provider = withPersonalizedCatalog(builtinProvider(), personalize, "https://pi.dev");
 
 		// pi versions before per-key lists stored the plain pi.dev catalog here, and saved an empty list
 		// after a missing pi.dev catalog or a failed first request. Only such an entry can be empty.
@@ -343,5 +343,29 @@ describe("personalized catalog provider", () => {
 		await refreshProvider(provider, store, { allowNetwork: false });
 		expect(provider.getModels()).toEqual([]);
 		expect(provider.getAllModels?.().map((entry) => entry.id)).toEqual(["image"]);
+	});
+
+	it("uses the bundled catalog and makes no request without a catalog base URL", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		const store = new InMemoryModelsStore();
+		const provider = withRemoteCatalog(builtinProvider(), undefined);
+
+		await refreshProvider(provider, store);
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(provider.getModels().map((entry) => entry.id)).toEqual(["static"]);
+	});
+
+	it("personalizes the bundled catalog without a request to a catalog origin", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		const store = new InMemoryModelsStore();
+		const personalize: PersonalizeCatalog = async (catalog) => catalog.filter((entry) => entry.id === "static");
+		const provider = withPersonalizedCatalog(builtinProvider(), personalize, undefined);
+
+		await refreshProvider(provider, store);
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(provider.getModels().map((entry) => entry.id)).toEqual(["static"]);
+		expect((await store.read(provider.id))?.models.map((entry) => entry.id)).toEqual(["static"]);
 	});
 });

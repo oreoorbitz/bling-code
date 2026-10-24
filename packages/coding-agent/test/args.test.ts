@@ -21,6 +21,26 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--harness flag", () => {
+		test("parses stock and bling", () => {
+			expect(parseArgs(["--harness", "stock"]).harness).toBe("stock");
+			expect(parseArgs(["--harness", "bling"]).harness).toBe("bling");
+		});
+
+		test("reports an invalid value", () => {
+			const result = parseArgs(["--harness", "bogus"]);
+			expect(result.harness).toBeUndefined();
+			expect(result.diagnostics).toEqual([{ type: "error", message: expect.stringContaining('"bogus"') }]);
+		});
+
+		test("reports a missing value without consuming the next flag", () => {
+			const result = parseArgs(["--harness", "--print"]);
+			expect(result.diagnostics).toEqual([{ type: "error", message: "--harness requires bling or stock" }]);
+			expect(result.print).toBe(true);
+			expect(parseArgs(["--harness"]).diagnostics).toHaveLength(1);
+		});
+	});
+
 	describe("--help flag", () => {
 		test("parses --help flag", () => {
 			const result = parseArgs(["--help"]);

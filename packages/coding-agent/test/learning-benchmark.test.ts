@@ -52,7 +52,7 @@ describe("ProjectBenchmarkStore", () => {
 		expect(reopened.list()).toEqual([added]);
 		const other = await ProjectBenchmarkStore.open(makeProject());
 		expect(other.list()).toEqual([]);
-		expect(existsSync(join(project, ".ling", "benchmarks.json"))).toBe(true);
+		expect(existsSync(join(project, ".bling", "benchmarks.json"))).toBe(true);
 	});
 
 	it("rejects invalid and duplicate definitions", async () => {
@@ -84,7 +84,7 @@ describe("ProjectBenchmarkStore", () => {
 
 		const ledger = await ProjectActionStore.open(project).list();
 		expect(ledger).toEqual([result]);
-		expect(getLearningPaths(project).actions).toBe(join(project, ".ling", "learning", "actions.jsonl"));
+		expect(getLearningPaths(project).actions).toBe(join(project, ".bling", "learning", "actions.jsonl"));
 	});
 
 	it("records assertion and process failures instead of hiding them", async () => {
@@ -184,7 +184,7 @@ describe("ProjectBenchmarkStore", () => {
 	it("fails and records a run when its definition file changes during execution", async () => {
 		const project = makeProject();
 		const store = await ProjectBenchmarkStore.open(project);
-		const definitionsPath = join(project, ".ling", "benchmarks.json");
+		const definitionsPath = join(project, ".bling", "benchmarks.json");
 		await store.add({
 			name: "tampered",
 			...nodeScript(`require('fs').writeFileSync(${JSON.stringify(definitionsPath)}, '{}')`),
@@ -262,7 +262,7 @@ async function runCli(args: string[], cwd: string): Promise<CliResult> {
 	const previous = process.exitCode;
 	process.exitCode = undefined;
 	try {
-		expect(await runLingBenchmarkCommand(args, { cwd })).toBe(true);
+		expect(await runLingBenchmarkCommand(args, { cwd, agentDir: makeProject() })).toBe(true);
 		return { stdout: logs.join("\n"), stderr: errors.join("\n"), exitCode: process.exitCode };
 	} finally {
 		process.exitCode = previous;
@@ -270,7 +270,7 @@ async function runCli(args: string[], cwd: string): Promise<CliResult> {
 	}
 }
 
-describe("ling benchmark", () => {
+describe("bling benchmark", () => {
 	it("adds, lists, runs, inspects, and removes a project oracle without a model", async () => {
 		const project = makeProject();
 		const added = await runCli(
@@ -303,6 +303,44 @@ describe("ling benchmark", () => {
 		const removed = await runCli(["benchmark", "remove", "cli-oracle"], project);
 		expect(removed.stdout).toBe("Removed cli-oracle");
 		expect((await ProjectBenchmarkStore.open(project)).list()).toEqual([]);
+	});
+
+	it("records the harness profile from --harness and lists it in runs", async () => {
+		const project = makeProject();
+		await runCli(
+			["benchmark", "add", "arm", "--expect-exit", "0", "--", process.execPath, "-e", "process.exit(0)"],
+			project,
+		);
+		const stock = await runCli(["benchmark", "run", "arm", "--harness", "stock"], project);
+		expect(stock.exitCode).toBeUndefined();
+		expect(stock.stdout).toMatch(/^PASS arm run_/);
+		const plain = await runCli(["benchmark", "run", "arm"], project);
+		expect(plain.exitCode).toBeUndefined();
+		const actions = (await ProjectActionStore.open(project).list()) as LearningBenchmarkAction[];
+		expect(actions.map((action) => action.harnessProfile)).toEqual(["stock", "bling"]);
+		const runs = await runCli(["benchmark", "runs", "arm"], project);
+		expect(runs.stdout).toContain("\tstock");
+		expect(runs.stdout).toContain("\tbling");
+	});
+
+	it("rejects an invalid --harness value", async () => {
+		const project = makeProject();
+		await runCli(["benchmark", "add", "arm", "--", process.execPath, "-e", "0"], project);
+		const result = await runCli(["benchmark", "run", "arm", "--harness", "bogus"], project);
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain("--harness requires bling or stock");
+		expect(await ProjectActionStore.open(project).list()).toHaveLength(0);
+	});
+
+	it("store.run stamps the profile, leaving unprofiled records unchanged", async () => {
+		const project = makeProject();
+		const store = await ProjectBenchmarkStore.open(project);
+		await store.add({ name: "ctl", ...nodeScript("process.exit(0)"), oracle: { exitCode: 0 } });
+		const bare = await store.run("ctl");
+		const stock = await store.run("ctl", { harnessProfile: "stock" });
+		expect("harnessProfile" in bare).toBe(false);
+		expect(stock.harnessProfile).toBe("stock");
+		expect(stock.actionId).not.toBe(bare.actionId);
 	});
 
 	it("returns a failing status for a failed oracle while retaining its run", async () => {
@@ -366,6 +404,6 @@ describe("ling benchmark", () => {
 		const project = makeProject();
 		const result = await runCli(["benchmark", "--help"], project);
 		expect(result.stdout).toContain("Project-specific executable benchmarks");
-		expect(existsSync(join(project, ".ling"))).toBe(false);
+		expect(existsSync(join(project, ".bling"))).toBe(false);
 	});
 });

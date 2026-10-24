@@ -584,6 +584,15 @@ export const VERSION: string = pkg.version || "0.0.0";
 // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
 export const ENV_SESSION_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_SESSION_DIR`;
+/** Opt-in startup update check against the npm registry. */
+export const ENV_UPDATE_CHECK = `${APP_NAME.toUpperCase()}_UPDATE_CHECK`;
+/** Opt-in overlay of newer model catalog data from pi.dev. */
+export const ENV_REMOTE_CATALOG = `${APP_NAME.toUpperCase()}_REMOTE_CATALOG`;
+
+export function isTruthyEnvFlag(value: string | undefined): boolean {
+	if (!value) return false;
+	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
 
 export function expandTildePath(path: string): string {
 	return normalizePath(path);

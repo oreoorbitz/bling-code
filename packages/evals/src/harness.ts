@@ -17,7 +17,7 @@ import {
 	ModelRuntime,
 	readStoredCredential,
 	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+} from "blingcode";
 import {
 	attachHarnessRunToError,
 	createHarness,
@@ -262,7 +262,7 @@ export function verifySystemPrompt(
 	if (!systemPrompt.includes("\n<rules>\n")) {
 		throw new Error(`Pi system prompt lost its rules in the ${options.name} eval variant.`);
 	}
-	const hasDocumentation = systemPrompt.includes("\n<docs>\nPi documentation (read only");
+	const hasDocumentation = /\n<docs>\n[^\n]*documentation \(read only/.test(systemPrompt);
 	if (hasDocumentation !== options.expectedPiDocumentation) {
 		throw new Error(`Pi system prompt does not match the ${options.name} eval variant.`);
 	}

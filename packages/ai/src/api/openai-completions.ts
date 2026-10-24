@@ -571,6 +571,11 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
 					output.responseModel ||= chunk.model;
 				}
+				// OpenRouter reports the serving upstream host as a top-level `provider` string on each chunk.
+				const servedProvider = (chunk as { provider?: unknown }).provider;
+				if (typeof servedProvider === "string" && servedProvider.length > 0) {
+					output.responseProvider ||= servedProvider;
+				}
 				if (chunk.usage) {
 					output.usage = parseChunkUsage(chunk.usage, model);
 				}

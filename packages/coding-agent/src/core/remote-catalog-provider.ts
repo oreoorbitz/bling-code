@@ -11,7 +11,6 @@ import { VERSION } from "../config.ts";
 import { fetchWithRetry } from "../utils/management-http.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 
-const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
 const REMOTE_CATALOG_ATTEMPT_TIMEOUT_MS = 4_000;
 export const REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 /**
@@ -103,9 +102,11 @@ export type PersonalizeCatalog = (
 /** Add a persisted pi.dev catalog overlay to a static built-in provider. */
 export function withRemoteCatalog(
 	provider: Provider,
-	catalogBaseUrl: string = DEFAULT_CATALOG_BASE_URL,
+	catalogBaseUrl: string | undefined,
 	localGeneratedAt?: number,
 ): Provider {
+	// No catalog origin: the overlay is disabled and only the bundled catalog is used.
+	if (catalogBaseUrl === undefined) return provider;
 	let dynamicModels: readonly AnyModel[] = [];
 
 	return {
@@ -195,7 +196,7 @@ export function withRemoteCatalog(
 export function withPersonalizedCatalog(
 	provider: Provider,
 	personalize: PersonalizeCatalog,
-	catalogBaseUrl: string = DEFAULT_CATALOG_BASE_URL,
+	catalogBaseUrl: string | undefined,
 	localGeneratedAt?: number,
 ): Provider {
 	let personalModels: readonly AnyModel[] = [];
@@ -219,13 +220,15 @@ export function withPersonalizedCatalog(
 			}
 			if (!context.allowNetwork || context.signal.aborted) return;
 
-			const response = await requestCatalog(provider.id, catalogBaseUrl, context.signal);
-			if (context.signal.aborted) return;
 			let remote: readonly AnyModel[] = [];
-			if (response.status !== 404 && response.status !== 501) {
-				if (!response.ok) throw new Error(`Model catalog request failed for ${provider.id}: ${response.status}`);
-				const catalog = await readCatalog(provider.id, response);
-				if (isNewer(catalog.lastModified, localGeneratedAt)) remote = catalog.models;
+			if (catalogBaseUrl !== undefined) {
+				const response = await requestCatalog(provider.id, catalogBaseUrl, context.signal);
+				if (context.signal.aborted) return;
+				if (response.status !== 404 && response.status !== 501) {
+					if (!response.ok) throw new Error(`Model catalog request failed for ${provider.id}: ${response.status}`);
+					const catalog = await readCatalog(provider.id, response);
+					if (isNewer(catalog.lastModified, localGeneratedAt)) remote = catalog.models;
+				}
 			}
 			const personalized = await personalize(mergeModels(builtinModels(), remote), context);
 			if (context.signal.aborted) return;

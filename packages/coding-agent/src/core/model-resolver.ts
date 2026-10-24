@@ -14,6 +14,7 @@ import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import { isLingModelRef, LING_DEFAULT_PROFILE, LING_OPENROUTER_PROVIDER_ID, LING_PROFILES } from "./ling-models.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 
 /** Default chat model IDs for providers with built-in chat models. */
@@ -30,7 +31,7 @@ export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
 	google: "gemini-3.1-pro-preview",
 	"google-vertex": "gemini-3.1-pro-preview",
 	"github-copilot": "gpt-6.1-sol",
-	openrouter: "moonshotai/kimi-k2.6",
+	openrouter: "inclusionai/ling-3.1-flash",
 	"vercel-ai-gateway": "zai/glm-5.1",
 	xai: "grok-4.7",
 	groq: "openai/gpt-oss-120b",
@@ -588,9 +589,9 @@ export async function findInitialModel(options: {
 		}
 	}
 
-	// A configured Ling endpoint is an explicit model contract. Never replace a missing or
+	// A saved Ling default is an explicit model contract. Never replace a missing or
 	// unauthenticated Ling default with another provider or a different Ling generation.
-	if (defaultProvider === "ling" && defaultModelId) {
+	if (defaultModelId && isLingModelRef(defaultProvider, defaultModelId)) {
 		return { model: undefined, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
 	}
 
@@ -598,6 +599,16 @@ export async function findInitialModel(options: {
 	const availableModels = [...modelRuntime.getAvailableSnapshot()];
 
 	if (availableModels.length > 0) {
+		// Bling Code prefers the default Ling profile on OpenRouter over other providers' defaults.
+		const lingDefault = availableModels.find(
+			(m) =>
+				m.provider === LING_OPENROUTER_PROVIDER_ID &&
+				m.id === LING_PROFILES[LING_DEFAULT_PROFILE].openRouterModelId,
+		);
+		if (lingDefault) {
+			return { model: lingDefault, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+		}
+
 		// Try to find a default model from known providers
 		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
 			const defaultId = defaultModelPerProvider[provider];

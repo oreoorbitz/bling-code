@@ -232,6 +232,8 @@ See [Configuration](configuration.md) for saved configuration, [Security](securi
   Appends text or an existing file to the system prompt and is repeatable.
 - `--tui-mode <mode>`<br>
   Uses `fullscreen` (default) or `regular` terminal mode.
+- `--harness <bling|stock>`<br>
+  Selects the harness profile for this run, overriding `harness.profile`. `stock` reproduces upstream Pi prompt behavior with no curated memory, for control runs.
 - `--verbose`<br>
   Shows verbose interactive startup information, overriding `quietStartup`.
 - `-a`, `--approve`<br>

@@ -35,7 +35,7 @@ const readTool: Tool = {
 	parameters: Type.Object({ path: Type.String() }),
 };
 
-/** Mirrors the provider entry written by `ling configure` (see src/cli/ling-configure.ts). */
+/** Mirrors the provider entry written by `bling configure` (see src/cli/ling-configure.ts). */
 function lingModel(baseUrl: string): Model<"openai-completions"> {
 	return {
 		id: MODEL_ID,

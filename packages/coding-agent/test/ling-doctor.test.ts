@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { diagnoseLingConfiguration } from "../src/cli/ling-doctor.ts";
+import { diagnoseLingConfiguration, diagnoseLingOpenRouterConfiguration } from "../src/cli/ling-doctor.ts";
 import type { ModelsJsonProvider } from "../src/core/model-config.ts";
 
 function provider(overrides: Partial<ModelsJsonProvider> = {}): ModelsJsonProvider {
@@ -110,5 +110,133 @@ describe("diagnoseLingConfiguration", () => {
 		const diagnostics = diagnoseLingConfiguration({ provider: provider({ apiKey: "sk-literal-secret" }) });
 		expect(messagesAt(diagnostics, "warning")).toContain("stores a literal credential");
 		expect(JSON.stringify(diagnostics)).not.toContain("sk-literal-secret");
+	});
+});
+
+describe("diagnoseLingOpenRouterConfiguration", () => {
+	const catalogModelIds = new Set(["inclusionai/ling-3.1-flash", "inclusionai/ling-3.0-flash"]);
+	const configured: ModelsJsonProvider = {
+		modelOverrides: {
+			"inclusionai/ling-3.1-flash": {
+				samplingParams: { temperature: 1, top_p: 0.95, top_k: 20 },
+				compat: { openRouterRouting: { only: ["novita"], allow_fallbacks: false } },
+			},
+		},
+	};
+
+	test("accepts a configured default without exposing the credential", () => {
+		const secret = "sk-or-do-not-display";
+		const diagnostics = diagnoseLingOpenRouterConfiguration({
+			provider: configured,
+			defaultProvider: "openrouter",
+			defaultModel: "inclusionai/ling-3.1-flash",
+			env: { OPENROUTER_API_KEY: secret },
+			hasStoredCredential: false,
+			catalogModelIds,
+		});
+		expect(messagesAt(diagnostics, "error")).toBe("");
+		expect(messagesAt(diagnostics, "warning")).toBe("");
+		expect(JSON.stringify(diagnostics)).not.toContain(secret);
+		expect(JSON.stringify(diagnostics)).toContain("openrouter/inclusionai/ling-3.1-flash");
+		expect(JSON.stringify(diagnostics)).toContain("Upstream: novita (no fallbacks)");
+	});
+
+	test("warns when the upstream is unpinned or allows fallbacks", () => {
+		const input = {
+			defaultProvider: "openrouter",
+			defaultModel: "inclusionai/ling-3.1-flash",
+			env: { OPENROUTER_API_KEY: "set" },
+			hasStoredCredential: false,
+			catalogModelIds,
+		};
+		const unpinned = diagnoseLingOpenRouterConfiguration({
+			...input,
+			provider: { modelOverrides: { "inclusionai/ling-3.1-flash": { samplingParams: { temperature: 1 } } } },
+		});
+		expect(messagesAt(unpinned, "warning")).toContain("No upstream pin");
+		const fallback = diagnoseLingOpenRouterConfiguration({
+			...input,
+			provider: {
+				modelOverrides: {
+					"inclusionai/ling-3.1-flash": { compat: { openRouterRouting: { order: ["novita"] } } },
+				},
+			},
+		});
+		expect(messagesAt(fallback, "warning")).toContain("allows fallbacks");
+	});
+
+	test("accepts a stored OpenRouter login instead of the environment variable", () => {
+		const diagnostics = diagnoseLingOpenRouterConfiguration({
+			provider: configured,
+			defaultProvider: "openrouter",
+			defaultModel: "inclusionai/ling-3.1-flash",
+			env: {},
+			hasStoredCredential: true,
+			catalogModelIds,
+		});
+		expect(messagesAt(diagnostics, "error")).toBe("");
+	});
+
+	test("reports a missing credential and points out the misspelled variable name", () => {
+		const errors = messagesAt(
+			diagnoseLingOpenRouterConfiguration({
+				env: { OPEN_ROUTER_API_KEY: "set" },
+				hasStoredCredential: false,
+				catalogModelIds,
+			}),
+			"error",
+		);
+		expect(errors).toContain("Set OPENROUTER_API_KEY or run /login");
+		expect(errors).toContain("expected name is OPENROUTER_API_KEY");
+	});
+
+	test("rejects a Ling default missing from the catalog", () => {
+		const errors = messagesAt(
+			diagnoseLingOpenRouterConfiguration({
+				defaultProvider: "openrouter",
+				defaultModel: "inclusionai/ling-3.0-tiny",
+				env: { OPENROUTER_API_KEY: "set" },
+				hasStoredCredential: false,
+				catalogModelIds,
+			}),
+			"error",
+		);
+		expect(errors).toContain("not in the OpenRouter model catalog");
+	});
+
+	test("warns about missing or non-vendor sampling", () => {
+		const missing = diagnoseLingOpenRouterConfiguration({
+			env: { OPENROUTER_API_KEY: "set" },
+			hasStoredCredential: false,
+			catalogModelIds,
+		});
+		expect(messagesAt(missing, "warning")).toContain("No saved default");
+		expect(messagesAt(missing, "warning")).toContain("No sampling override for inclusionai/ling-3.1-flash");
+
+		const drifted = diagnoseLingOpenRouterConfiguration({
+			provider: {
+				modelOverrides: {
+					"inclusionai/ling-3.0-flash": { samplingParams: { temperature: 1, top_p: 0.95, top_k: 20 } },
+				},
+			},
+			defaultProvider: "openrouter",
+			defaultModel: "inclusionai/ling-3.0-flash",
+			env: { OPENROUTER_API_KEY: "set" },
+			hasStoredCredential: false,
+			catalogModelIds,
+		});
+		expect(messagesAt(drifted, "warning")).toContain("differs from the vendor recommendation");
+	});
+
+	test("warns rather than fails when a non-Ling model is the saved default", () => {
+		const diagnostics = diagnoseLingOpenRouterConfiguration({
+			defaultProvider: "openrouter",
+			defaultModel: "minimax/minimax-m3.1-flash",
+			env: { OPENROUTER_API_KEY: "set" },
+			hasStoredCredential: false,
+			catalogModelIds,
+		});
+		expect(messagesAt(diagnostics, "error")).toBe("");
+		expect(messagesAt(diagnostics, "warning")).toContain("not a Ling model");
 	});
 });

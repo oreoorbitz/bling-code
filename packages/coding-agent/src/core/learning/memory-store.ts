@@ -97,7 +97,7 @@ export function renderProjectMemory(
 }
 
 /**
- * Bounded, project-local curated memory. Source of truth is memory.json under .ling/learning;
+ * Bounded, project-local curated memory. Source of truth is memory.json under .bling/learning;
  * a human-readable MEMORY.md is regenerated after every mutation. No user or global profile state.
  */
 export class ProjectMemoryStore {

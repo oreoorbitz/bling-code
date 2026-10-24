@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME } from "../../config.ts";
+import type { HarnessProfile } from "../settings-manager.ts";
 import {
 	canonicalJson,
 	createBenchmarkAction,
@@ -237,6 +238,7 @@ async function executeBenchmark(
 	projectCwd: string,
 	benchmark: ProjectBenchmark,
 	control?: { command: string; args: string[]; purpose: "positive-control" | "negative-control" },
+	harnessProfile?: HarnessProfile,
 ): Promise<LearningBenchmarkAction> {
 	const startedAt = Date.now();
 	const startedMonotonic = performance.now();
@@ -337,6 +339,7 @@ async function executeBenchmark(
 		...(definitionHashAfter === undefined ? {} : { definitionFileHashAfter: definitionHashAfter }),
 		integrityPassed,
 		...(spawnError ? { error: spawnError } : {}),
+		...(harnessProfile === undefined ? {} : { harnessProfile }),
 	});
 }
 
@@ -431,30 +434,43 @@ export class ProjectBenchmarkStore {
 		);
 	}
 
-	async run(nameOrId: string): Promise<LearningBenchmarkAction> {
+	async run(nameOrId: string, options: { harnessProfile?: HarnessProfile } = {}): Promise<LearningBenchmarkAction> {
 		this.definitions = await readDefinitions(this.cwd);
 		const benchmark = this.get(nameOrId);
-		const action = await executeBenchmark(this.cwd, benchmark);
+		const action = await executeBenchmark(this.cwd, benchmark, undefined, options.harnessProfile);
 		await ProjectActionStore.open(this.cwd).append(action);
 		return action;
 	}
 
-	async validate(nameOrId: string): Promise<BenchmarkValidationResult> {
+	async validate(
+		nameOrId: string,
+		options: { harnessProfile?: HarnessProfile } = {},
+	): Promise<BenchmarkValidationResult> {
 		this.definitions = await readDefinitions(this.cwd);
 		const benchmark = this.get(nameOrId);
 		if (!benchmark.validation) throw new Error(`Benchmark has no validation controls: ${benchmark.name}`);
 		const actionStore = ProjectActionStore.open(this.cwd);
-		const positive = await executeBenchmark(this.cwd, benchmark, {
-			command: benchmark.validation.positive.command,
-			args: benchmark.validation.positive.args ?? [],
-			purpose: "positive-control",
-		});
+		const positive = await executeBenchmark(
+			this.cwd,
+			benchmark,
+			{
+				command: benchmark.validation.positive.command,
+				args: benchmark.validation.positive.args ?? [],
+				purpose: "positive-control",
+			},
+			options.harnessProfile,
+		);
 		await actionStore.append(positive);
-		const negative = await executeBenchmark(this.cwd, benchmark, {
-			command: benchmark.validation.negative.command,
-			args: benchmark.validation.negative.args ?? [],
-			purpose: "negative-control",
-		});
+		const negative = await executeBenchmark(
+			this.cwd,
+			benchmark,
+			{
+				command: benchmark.validation.negative.command,
+				args: benchmark.validation.negative.args ?? [],
+				purpose: "negative-control",
+			},
+			options.harnessProfile,
+		);
 		await actionStore.append(negative);
 		const negativeExecuted = negative.exitCode !== null && !negative.timedOut && !negative.error;
 		return {

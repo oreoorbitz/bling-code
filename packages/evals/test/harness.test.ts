@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { getDocsPath, getExamplesPath, getReadmePath } from "@earendil-works/pi-coding-agent";
+import { getDocsPath, getExamplesPath, getReadmePath } from "blingcode";
 import { describe, expect, it, vi } from "vitest";
 import { buildSystemPrompt } from "../../coding-agent/src/core/system-prompt.ts";
 import {
@@ -74,7 +74,7 @@ describe("documentation variant", () => {
 			cwd: "/workspace",
 			selectedTools: [...DOCUMENTATION_EVAL_TOOLS],
 		});
-		expect(prompt).toContain("\n<docs>\nPi documentation (read only");
+		expect(prompt).toMatch(/\n<docs>\n[^\n]*documentation \(read only/);
 		expect(prompt).toContain("\n<rules>\n");
 		expect(prompt).toContain("\n<cwd>\n/workspace\n</cwd>");
 		expect(prompt).toContain("docs/models.md");

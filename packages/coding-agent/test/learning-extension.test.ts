@@ -28,6 +28,7 @@ type CommandHandler = (args: string, ctx: ExtensionContext) => Promise<void> | v
 
 interface SetupOptions {
 	learning?: Settings["learning"];
+	harness?: Settings["harness"];
 	trusted?: boolean;
 	sessionId?: string;
 }
@@ -65,7 +66,7 @@ function setup(cwd: string, options: SetupOptions = {}) {
 		on(event: string, handler: EventHandler) {
 			handlers.set(event, handler);
 		},
-		getSettings: () => ({ learning: options.learning }) as Settings,
+		getSettings: () => ({ learning: options.learning, harness: options.harness }) as Settings,
 		registerTool(definition: ToolDefinition) {
 			memoryTool = definition;
 		},
@@ -103,13 +104,13 @@ function setup(cwd: string, options: SetupOptions = {}) {
 		parentToolCallId?: string;
 	}) => emit("tool_execution_end", { type: "tool_execution_end", ...event } as ToolExecutionEndEvent);
 
-	async function beforeAgentStart(): Promise<BeforeAgentStartEvent> {
+	async function beforeAgentStart(selectedTools?: string[]): Promise<BeforeAgentStartEvent> {
 		const event = {
 			type: "before_agent_start",
 			messageType: "user",
 			prompt: "hello",
 			systemPrompt: "",
-			systemPromptOptions: normalizeBuildSystemPromptOptions({ cwd }),
+			systemPromptOptions: normalizeBuildSystemPromptOptions({ cwd, ...(selectedTools ? { selectedTools } : {}) }),
 		} as BeforeAgentStartEvent;
 		await emit("before_agent_start", event);
 		return event;
@@ -156,6 +157,36 @@ describe("createProjectLearningExtension", () => {
 
 	afterEach(() => {
 		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	describe("harness profile", () => {
+		it("stock injects no project memory and drops the project_memory tool", async () => {
+			await (await ProjectMemoryStore.open(tempDir)).add("Use pnpm");
+			const stock = setup(tempDir, { harness: { profile: "stock" } });
+			await stock.sessionStart();
+			const event = await stock.beforeAgentStart(["read", "project_memory"]);
+			expect(event.systemPromptOptions.sections.project_memory).toBeUndefined();
+			expect(event.systemPromptOptions.selectedTools).toEqual(["read"]);
+
+			const bling = setup(tempDir, { harness: { profile: "bling" } });
+			await bling.sessionStart();
+			const blingEvent = await bling.beforeAgentStart(["read", "project_memory"]);
+			expect(blingEvent.systemPromptOptions.sections.project_memory).toContain("Use pnpm");
+			expect(blingEvent.systemPromptOptions.selectedTools).toEqual(["read", "project_memory"]);
+		});
+
+		it("stamps message and tool records with the profile", async () => {
+			const h = setup(tempDir, { harness: { profile: "stock" } });
+			await h.sessionStart();
+			await h.messageEnd(assistantMessage("hi", 1000));
+			await h.toolExecutionStart({ toolCallId: "c1", toolName: "bash", args: {} });
+			await h.toolExecutionEnd({ toolCallId: "c1", toolName: "bash", result: "ok", isError: false });
+			const records = await readLedger(tempDir);
+			expect(records.map((record) => (record as { harnessProfile?: string }).harnessProfile)).toEqual([
+				"stock",
+				"stock",
+			]);
+		});
 	});
 
 	describe("action logging", () => {

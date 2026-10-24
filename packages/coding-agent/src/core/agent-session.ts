@@ -1742,6 +1742,7 @@ export class AgentSession {
 			hiddenTools: [...this._hiddenDeclarations],
 			toolSnippets,
 			toolGuidelines: Object.fromEntries(this._toolPromptGuidelines),
+			harnessProfile: this.settingsManager.getHarnessProfile(),
 		});
 	}
 

@@ -37,7 +37,15 @@ import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { APP_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
+import {
+	APP_NAME,
+	ENV_SESSION_DIR,
+	expandTildePath,
+	getAgentDir,
+	getPackageDir,
+	isTruthyEnvFlag,
+	VERSION,
+} from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -106,11 +114,6 @@ function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]
 		const prefix = diagnostic.type === "error" ? "Error: " : diagnostic.type === "warning" ? "Warning: " : "";
 		console.error(color(`${prefix}${diagnostic.message}`));
 	}
-}
-
-function isTruthyEnvFlag(value: string | undefined): boolean {
-	if (!value) return false;
-	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
@@ -610,7 +613,7 @@ export async function main(args: string[], options?: MainOptions) {
 	if (await runLingLearningCommand(args, { cwd, agentDir })) {
 		return;
 	}
-	if (await runLingBenchmarkCommand(args, { cwd })) {
+	if (await runLingBenchmarkCommand(args, { cwd, agentDir })) {
 		return;
 	}
 
@@ -766,6 +769,7 @@ export async function main(args: string[], options?: MainOptions) {
 				parsed.projectTrustOverride ??
 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
 		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
+		if (parsed.harness) runtimeSettingsManager.applyOverrides({ harness: { profile: parsed.harness } });
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir,

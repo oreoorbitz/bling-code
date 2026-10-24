@@ -9,7 +9,6 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import lockfile from "proper-lockfile";
 import { selectConfig } from "./cli/config-selector.ts";
@@ -18,10 +17,12 @@ import {
 	APP_NAME,
 	CONFIG_DIR_NAME,
 	detectInstallMethod,
+	ENV_REMOTE_CATALOG,
 	getAgentDir,
 	getPackageDir,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
+	isTruthyEnvFlag,
 	PACKAGE_NAME,
 	type SelfUpdateCommand,
 	type SelfUpdatePackageTarget,
@@ -48,7 +49,8 @@ export type PackageCommand = "install" | "remove" | "update" | "list";
 
 type UpdateTarget = { type: "all" } | { type: "self" } | { type: "extensions"; source?: string } | { type: "models" };
 
-const DEFAULT_INSTALLER_API_BASE = "https://pi.dev/api/installer/releases";
+// Bling is never installed by an upstream installer, so there is no default release API.
+const DEFAULT_INSTALLER_API_BASE = "";
 const MANAGED_INSTALL_MARKER = "managed-install.json";
 const MANAGED_RELEASE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
@@ -194,6 +196,9 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
 	if (!MANAGED_RELEASE_VERSION_RE.test(version)) {
 		throw new Error(`Invalid managed release version: ${version}`);
 	}
+	if (!(process.env.PI_INSTALLER_API_BASE?.trim() || DEFAULT_INSTALLER_API_BASE)) {
+		throw new Error("Managed self-update requires PI_INSTALLER_API_BASE; no default release API is configured.");
+	}
 
 	let releaseLock: () => Promise<void>;
 	try {
@@ -243,23 +248,6 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
 		await releaseLock();
 	}
 }
-
-const SELF_UPDATE_NOTE_MARKDOWN_THEME: MarkdownTheme = {
-	heading: (text) => chalk.bold(chalk.yellow(text)),
-	link: (text) => chalk.cyan(text),
-	linkUrl: (text) => chalk.dim(text),
-	code: (text) => chalk.yellow(text),
-	codeBlock: (text) => chalk.dim(text),
-	codeBlockBorder: (text) => chalk.dim(text),
-	quote: (text) => chalk.dim(text),
-	quoteBorder: (text) => chalk.dim(text),
-	hr: (text) => chalk.dim(text),
-	listBullet: (text) => chalk.yellow(text),
-	bold: (text) => chalk.bold(text),
-	italic: (text) => chalk.italic(text),
-	strikethrough: (text) => chalk.strikethrough(text),
-	underline: (text) => chalk.underline(text),
-};
 
 interface PackageCommandOptions {
 	command: PackageCommand;
@@ -630,6 +618,11 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
 		clearTimeout(timeout);
 	}
 	console.log(chalk.green("Model catalogs refreshed"));
+	if (!isTruthyEnvFlag(process.env[ENV_REMOTE_CATALOG])) {
+		console.log(
+			chalk.dim(`Remote model catalog overlay is disabled; set ${ENV_REMOTE_CATALOG}=1 to fetch it from pi.dev.`),
+		);
+	}
 }
 
 function printSelfUpdateUnavailable(
@@ -655,32 +648,11 @@ function printPnpmSelfUpdateMetadataHint(): void {
 	console.error(chalk.yellow(`Run \`pnpm store prune\` and retry \`${APP_NAME} update --self\`.`));
 }
 
-function printSelfUpdateNote(note: string): void {
-	const trimmedNote = note.trim();
-	if (!trimmedNote) {
-		return;
-	}
-
-	console.log();
-	console.log(chalk.bold(chalk.yellow("Update note")));
-	try {
-		const width = Math.max(20, process.stdout.columns ?? 80);
-		const renderedLines = new Markdown(trimmedNote, 0, 0, SELF_UPDATE_NOTE_MARKDOWN_THEME)
-			.render(width)
-			.map((line) => line.trimEnd());
-		console.log(renderedLines.join("\n"));
-	} catch {
-		console.log(trimmedNote);
-	}
-	console.log();
-}
-
 interface SelfUpdatePlan {
 	packageName: string;
 	installSpec: string;
 	version: string;
 	shouldRun: boolean;
-	note?: string;
 }
 
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
@@ -696,14 +668,13 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 		throw new Error(`Could not determine latest ${APP_NAME} version.`);
 	}
 
-	const packageName = latestRelease.packageName ?? PACKAGE_NAME;
+	const packageName = PACKAGE_NAME;
 	const installSpec = `${packageName}@${latestRelease.version}`;
-	if (force || packageName !== PACKAGE_NAME || isNewerPackageVersion(latestRelease.version, VERSION)) {
+	if (force || isNewerPackageVersion(latestRelease.version, VERSION)) {
 		return {
 			packageName,
 			installSpec,
 			version: latestRelease.version,
-			...(latestRelease.note ? { note: latestRelease.note } : {}),
 			shouldRun: true,
 		};
 	}
@@ -1071,9 +1042,6 @@ export async function handlePackageCommand(
 						return true;
 					}
 					if (managedInstallRoot) {
-						if (selfUpdatePlan.note) {
-							printSelfUpdateNote(selfUpdatePlan.note);
-						}
 						try {
 							console.log(chalk.dim(`Updating managed ${APP_NAME} installation...`));
 							await runManagedSelfUpdate(managedInstallRoot, selfUpdatePlan.version);
@@ -1106,9 +1074,6 @@ export async function handlePackageCommand(
 						process.exitCode = 1;
 						return true;
 					}
-					if (selfUpdatePlan.note) {
-						printSelfUpdateNote(selfUpdatePlan.note);
-					}
 					try {
 						if (installMethod === "npm") {
 							prepareWindowsNpmSelfUpdate();
@@ -1125,19 +1090,6 @@ export async function handlePackageCommand(
 						return true;
 					}
 					console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
-					// The pi.dev installer migrates global npm installs to a managed install
-					// that pins all dependencies. It does not migrate pnpm, yarn, or bun installs.
-					if (installMethod === "npm") {
-						const installerCommand =
-							process.platform === "win32"
-								? 'powershell -c "irm https://pi.dev/install.ps1 | iex"'
-								: "curl -fsSL https://pi.dev/install.sh | sh";
-						console.log();
-						console.log(chalk.yellow(`This npm installation of ${APP_NAME} does not pin its dependencies.`));
-						console.log(chalk.yellow("Run the installer to migrate to a managed installation that does:"));
-						console.log();
-						console.log(`  ${chalk.bold(installerCommand)}`);
-					}
 				}
 				return true;
 			}

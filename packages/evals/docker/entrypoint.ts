@@ -28,13 +28,12 @@ function assertWorkspace(): void {
 	assertDirectoryEntries("/repo", ["node_modules", "package.json", "packages", "vitest.base.ts"]);
 	assertDirectoryEntries("/repo/packages", ["evals"]);
 	assertDirectoryEntries("/repo/packages/evals", ["docker", "evals", "package.json", "src", "vitest.evals.config.ts"]);
-	const codingAgentDir = "/repo/node_modules/@earendil-works/pi-coding-agent";
+	const codingAgentDir = "/repo/node_modules/blingcode";
 	for (const name of ["package.json", "dist/index.js"]) {
 		if (!existsSync(join(codingAgentDir, name))) throw new Error(`Installed coding-agent is missing ${name}.`);
 	}
 	const internalScope = "/repo/node_modules/@earendil-works";
 	for (const packageName of readdirSync(internalScope)) {
-		if (packageName === "pi-coding-agent") continue;
 		const packageDirectory = join(internalScope, packageName);
 		for (const entry of readdirSync(packageDirectory, { withFileTypes: true })) {
 			if (
@@ -99,7 +98,7 @@ for (const path of [
 	assertRootOnly(path);
 	assertSandboxCannotRead(path);
 }
-const codingAgentEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+const codingAgentEntry = fileURLToPath(import.meta.resolve("blingcode"));
 if (codingAgentEntry !== "/repo/node_modules/@earendil-works/pi-coding-agent/dist/index.js") {
 	throw new Error(`Eval does not resolve pi-coding-agent from dist: ${codingAgentEntry}`);
 }

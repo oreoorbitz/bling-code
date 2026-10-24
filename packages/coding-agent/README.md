@@ -1,10 +1,10 @@
-# Ling Code
+# Bling Code
 
-Ling Code is a full fork of [Pi](https://github.com/earendil-works/pi), focused on Ling 3.1 Flash with an explicitly selectable Ling 3.0 profile. It retains Pi's CLI/TUI, tools, sessions, compaction, extensions, skills, prompt templates, and themes.
+Bling Code is a full fork of [Pi](https://github.com/earendil-works/pi), focused on Ling 3.1 Flash with explicitly selectable Ling 3.0 and Ling 3.0 VL profiles. It retains Pi's CLI/TUI, tools, sessions, compaction, extensions, skills, prompt templates, and themes.
 
-The endpoint is always explicit: Ling Code does not select a hosted provider, store API keys in `models.json`, or silently substitute another Ling version. Both profiles default to a 262,144-token served context and 32,768 output tokens; override these only to match the actual server.
+Ling is served through OpenRouter by default, using the built-in `openrouter` provider and its model catalog. A self-hosted OpenAI-compatible endpoint remains available with `--base-url`. Bling Code does not store API keys in `models.json` or silently substitute another model or Ling version.
 
-Use Ling Code [interactively](docs/usage.md), automate it in [print or JSON mode](docs/cli.md), control it over [RPC](docs/rpc.md), or build apps with the [Pi TypeScript SDK](docs/sdk.md).
+Use Bling Code [interactively](docs/usage.md), automate it in [print or JSON mode](docs/cli.md), control it over [RPC](docs/rpc.md), or build apps with the [Pi TypeScript SDK](docs/sdk.md).
 
 ## Getting started
 
@@ -15,22 +15,20 @@ npm install --ignore-scripts
 npm run build
 ```
 
-Configure a local vLLM or SGLang endpoint:
+Select Ling 3.1 Flash on OpenRouter with its recommended sampling:
 
 ```bash
-export LING_API_KEY=local-development-key
-node packages/coding-agent/dist/bundle/cli.js configure \
-  --base-url http://localhost:30000/v1 \
-  --dialect chat-template
+export OPENROUTER_API_KEY='your-openrouter-key'
+node packages/coding-agent/dist/bundle/cli.js configure
 ```
 
-Use `--dialect ling` for a first-party Ant Ling-compatible endpoint or `--dialect openrouter` for OpenRouter. Use `--profile 3.0` and the server's exact `--model-id` to select Ling 3.0 explicitly. Run `ling configure --help` for context, output, credential-variable, and replacement options.
+Use `--profile 3.0` or `--profile 3.0-vl` for Ling 3.0 Flash or its vision variant. For a self-hosted vLLM or SGLang server, add `--base-url http://localhost:30000/v1`; run `bling configure --help` for the endpoint, dialect, context, output, and credential-variable options.
 
-Start in the directory where you want Ling Code to work:
+Start in the directory where you want Bling Code to work:
 
 ```bash
 cd /path/to/project
-node /path/to/ling-code/packages/coding-agent/dist/bundle/cli.js
+node /path/to/bling-code/packages/coding-agent/dist/bundle/cli.js
 ```
 
 See the [model configuration documentation](docs/models.md) for advanced endpoint settings and the [documentation index](docs/index.md) for inherited Pi functionality.

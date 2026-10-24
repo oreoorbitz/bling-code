@@ -197,6 +197,16 @@ const LearningSettingsSchema = Type.Object({
 	),
 });
 
+const HarnessSettingsSchema = Type.Object({
+	profile: Type.Optional(
+		Type.Union([Type.Literal("bling"), Type.Literal("stock")], {
+			description:
+				'Harness profile. "bling" keeps Bling Code prompt additions and curated project memory. "stock" reproduces upstream Pi prompt behavior and injects no curated memory, for benchmark control runs.',
+			default: SETTINGS_DEFAULTS.harness.profile,
+		}),
+	),
+});
+
 const PackageSourceSchema = Type.Union(
 	[
 		Type.String({ description: "Load all resources from the package." }),
@@ -416,6 +426,7 @@ export const SettingsSchema = Type.Object(
 		warnings: Type.Optional(WarningSettingsSchema),
 		codemode: Type.Optional(CodemodeSettingsSchema),
 		learning: Type.Optional(LearningSettingsSchema),
+		harness: Type.Optional(HarnessSettingsSchema),
 		sessionDir: Type.Optional(
 			Type.String({
 				description: "Custom session storage directory, in the same format as the --session-dir CLI flag.",
@@ -505,6 +516,7 @@ export type SessionShareDestination = NonNullable<SettingsInput["sessionShareDes
 export type PackageSource = Static<typeof PackageSourceSchema>;
 export type FullscreenExitOutput = NonNullable<SettingsInput["fullscreenExitOutput"]>;
 export type TuiMode = NonNullable<SettingsInput["tuiMode"]>;
+export type HarnessProfile = NonNullable<NonNullable<SettingsInput["harness"]>["profile"]>;
 export type CacheWarmingMode = NonNullable<SettingsInput["cacheWarming"]>;
 export interface Settings extends Omit<SettingsInput, "queueMode" | "retry" | "skills" | "websockets"> {
 	retry?: RetrySettings;

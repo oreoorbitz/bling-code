@@ -4,6 +4,7 @@
 
 import { getSystemMessageText } from "@earendil-works/pi-ai";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.ts";
+import type { HarnessProfile } from "./settings-manager.ts";
 import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 
 export interface BuildSystemPromptOptions {
@@ -34,6 +35,8 @@ export interface BuildSystemPromptOptions {
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Pre-loaded skills. */
 	skills?: Skill[];
+	/** Harness profile. "stock" reproduces upstream Pi prompt text; undefined means "bling". */
+	harnessProfile?: HarnessProfile;
 }
 
 export type NormalizedBuildSystemPromptOptions = BuildSystemPromptOptions & {
@@ -81,6 +84,7 @@ export function normalizeBuildSystemPromptOptions(input: BuildSystemPromptOption
 		appendSystemPrompt: input.appendSystemPrompt ?? "",
 		sections: { ...(input.sections ?? {}) },
 		cwd: input.cwd,
+		harnessProfile: input.harnessProfile,
 		contextFiles: (input.contextFiles ?? []).map((file) => ({ ...file })),
 		skills: (input.skills ?? []).map((skill) => ({ ...skill })),
 	};
@@ -99,6 +103,7 @@ function buildRules(
 	selectedTools: string[],
 	toolGuidelines: Record<string, string[]>,
 	promptGuidelines: string[],
+	stock: boolean,
 ): string {
 	const rules: string[] = [];
 	const seen = new Set<string>();
@@ -129,9 +134,11 @@ function buildRules(
 		for (const rule of toolGuidelines[name] ?? []) addRule(rule);
 	}
 	for (const rule of promptGuidelines) addRule(rule);
-	addRule("Break complex work into verifiable steps and keep track of decisions and remaining work");
-	addRule("Run appropriate tests or checks, and never claim that unexecuted work was completed");
-	addRule("Before finishing, inspect the final changes and reconcile them with the request");
+	if (!stock) {
+		addRule("Break complex work into verifiable steps and keep track of decisions and remaining work");
+		addRule("Run appropriate tests or checks, and never claim that unexecuted work was completed");
+		addRule("Before finishing, inspect the final changes and reconcile them with the request");
+	}
 	addRule("Be concise in your responses");
 	addRule("Show file paths clearly when working with files");
 	return rules.map((rule) => `- ${rule}`).join("\n");
@@ -152,6 +159,7 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 		cwd,
 		contextFiles,
 		skills,
+		harnessProfile,
 	} = options;
 
 	for (const name of Object.keys(customSections)) {
@@ -159,20 +167,25 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 			throw new Error(`Invalid system prompt section name: ${name}`);
 		}
 	}
+	const stock = harnessProfile === "stock";
 
 	const declaredTools = selectedTools.filter((name) => !hiddenTools.includes(name));
 	const promptSections: Record<string, string> = {};
 	if (customPrompt) {
 		promptSections.preamble = customPrompt;
 	} else {
-		promptSections.preamble =
-			"You are an expert coding assistant operating inside Ling Code, a Pi-based coding agent harness for Ling models. You help users by reading files, executing commands, editing code, and writing new files.";
+		promptSections.preamble = stock
+			? "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files."
+			: "You are an expert coding assistant operating inside Bling Code, a Pi-based coding agent harness for Ling models. You help users by reading files, executing commands, editing code, and writing new files.";
 		const visibleTools = declaredTools.filter((name) => !!toolSnippets[name]);
 		const tools =
 			visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets[name]}`).join("\n") : "(none)";
 		promptSections.tools = `${tools}\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.`;
-		promptSections.rules = buildRules(declaredTools, toolGuidelines, promptGuidelines);
-		promptSections.docs = `Ling Code and Pi documentation (read only when the user asks about the harness, its SDK, extensions, themes, skills, or TUI):
+		promptSections.rules = buildRules(declaredTools, toolGuidelines, promptGuidelines, stock);
+		const docsHeader = stock
+			? "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):"
+			: "Bling Code and Pi documentation (read only when the user asks about the harness, its SDK, extensions, themes, skills, or TUI):";
+		promptSections.docs = `${docsHeader}
 - Main documentation: ${getReadmePath()}
 - Additional docs: ${getDocsPath()}
 - Examples: ${getExamplesPath()} (extensions, custom tools, SDK)
@@ -182,7 +195,7 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 - Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
 	}
 
-	promptSections.verification_discipline = CORE_VERIFICATION_INSTRUCTIONS;
+	if (!stock) promptSections.verification_discipline = CORE_VERIFICATION_INSTRUCTIONS;
 	if (appendSystemPrompt) promptSections.addendum = appendSystemPrompt;
 	if (contextFiles.length > 0) promptSections.project_context = renderProjectContext(contextFiles);
 	// A hidden reader is still reachable through another tool, so skills stay but the hint names no tool.

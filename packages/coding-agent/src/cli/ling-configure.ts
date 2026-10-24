@@ -3,27 +3,20 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import chalk from "chalk";
 import { APP_NAME } from "../config.ts";
+import {
+	LING_DEFAULT_PROFILE,
+	LING_ENDPOINT_PROVIDER_ID,
+	LING_OPENROUTER_PROVIDER_ID,
+	LING_PROFILES,
+	type LingProfile,
+} from "../core/ling-models.ts";
 import type { ModelsJsonProvider } from "../core/model-config.ts";
 import { SettingsManager } from "../core/settings-manager.ts";
 import { stripJsonComments } from "../utils/json.ts";
 import { stripBom } from "../utils/text.ts";
 
-export const LING_PROVIDER_ID = "ling";
 export const LING_DEFAULT_CONTEXT_WINDOW = 262144;
 export const LING_DEFAULT_MAX_TOKENS = 32768;
-
-const PROFILES = {
-	"3.1": {
-		modelId: "Ling-3.1-flash",
-		name: "Ling 3.1 Flash",
-		temperature: 1.0,
-	},
-	"3.0": {
-		modelId: "Ling-3.0-flash",
-		name: "Ling 3.0 Flash",
-		temperature: 0.6,
-	},
-} as const;
 
 const DIALECTS = {
 	ling: "ling",
@@ -31,13 +24,22 @@ const DIALECTS = {
 	openrouter: "openrouter",
 } as const;
 
-export type LingProfile = keyof typeof PROFILES;
 export type LingDialect = keyof typeof DIALECTS;
 
-export interface LingConfigureOptions {
+/** Ling through OpenRouter's built-in provider. Model metadata comes from the catalog. */
+export interface LingOpenRouterConfigureOptions {
+	target: "openrouter";
+	profile: LingProfile;
+	/** OpenRouter provider slug that exclusively serves the model, for example "novita" or "deepinfra/fp4". */
+	upstream: string;
+}
+
+/** Ling through an explicit self-hosted OpenAI-compatible endpoint, such as vLLM or SGLang. */
+export interface LingEndpointConfigureOptions {
+	target: "endpoint";
 	baseUrl: string;
 	profile: LingProfile;
-	modelId?: string;
+	modelId: string;
 	apiKeyEnv: string;
 	dialect: LingDialect;
 	contextWindow: number;
@@ -45,26 +47,32 @@ export interface LingConfigureOptions {
 	force: boolean;
 }
 
+export type LingConfigureOptions = LingOpenRouterConfigureOptions | LingEndpointConfigureOptions;
+
 export function printLingConfigureHelp(): void {
-	console.log(`${chalk.bold(`${APP_NAME} configure`)} - configure an explicit OpenAI-compatible Ling endpoint
+	console.log(`${chalk.bold(`${APP_NAME} configure`)} - select a Ling model on OpenRouter or a self-hosted endpoint
 
 ${chalk.bold("Usage:")}
+  ${APP_NAME} configure [--profile <version>]
   ${APP_NAME} configure --base-url <url> [options]
 
 ${chalk.bold("Options:")}
-  --base-url <url>          Required endpoint base URL, for example http://localhost:30000/v1
-  --profile <version>       Model profile: 3.1 (default) or 3.0
-  --model-id <id>           Served model ID (default: Ling-3.1-flash or Ling-3.0-flash)
+  --profile <version>       Model profile: 3.1 (default), 3.0, or 3.0-vl
+  --upstream <slug>         OpenRouter provider to pin, without fallbacks (default: novita; deepinfra for 3.0-vl)
+  --help, -h                Show this help
+
+${chalk.bold("Self-hosted endpoint options:")}
+  --base-url <url>          Endpoint base URL, for example http://localhost:30000/v1
+  --model-id <id>           Served model ID (default: Ling-3.1-flash, Ling-3.0-flash, or Ling-3.0-flash-vl)
   --api-key-env <name>      Environment variable holding the API key (default: LING_API_KEY)
   --dialect <name>          Reasoning request format: chat-template (default), ling, or openrouter
   --context-window <tokens> Served context window (default: 262144, not the 1M architectural maximum)
   --max-tokens <tokens>     Maximum output tokens (default: 32768)
-  --force                   Replace an existing ${LING_PROVIDER_ID} provider configuration
-  --help, -h                Show this help
+  --force                   Replace an existing ${LING_ENDPOINT_PROVIDER_ID} provider configuration
 
-No hosted endpoint is selected implicitly. The API key itself is never written to models.json.
-Use ${chalk.bold("--dialect ling")} for first-party Ant Ling, ${chalk.bold("chat-template")} for vLLM/SGLang,
-or ${chalk.bold("openrouter")} for OpenRouter.`);
+Without --base-url, the profile selects OpenRouter's ${chalk.bold("inclusionai/ling-*")} model and stores the vendor
+sampling parameters and upstream pin as a models.json override. Authenticate with OPENROUTER_API_KEY or /login.
+The API key itself is never written to models.json.`);
 }
 
 function readOptionValue(args: string[], index: number, flag: string): string {
@@ -79,19 +87,31 @@ function parsePositiveInteger(value: string, flag: string): number {
 	return parsed;
 }
 
+const ENDPOINT_ONLY_FLAGS = [
+	"--model-id",
+	"--api-key-env",
+	"--dialect",
+	"--context-window",
+	"--max-tokens",
+	"--force",
+] as const;
+
 export function parseLingConfigureArgs(args: string[]): LingConfigureOptions | { help: true } {
 	let baseUrl: string | undefined;
-	let profile: LingProfile = "3.1";
+	let profile: LingProfile = LING_DEFAULT_PROFILE;
 	let modelId: string | undefined;
 	let apiKeyEnv = "LING_API_KEY";
 	let dialect: LingDialect = "chat-template";
 	let contextWindow = LING_DEFAULT_CONTEXT_WINDOW;
 	let maxTokens = LING_DEFAULT_MAX_TOKENS;
 	let force = false;
+	let upstream: string | undefined;
+	const endpointFlags: string[] = [];
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--help" || arg === "-h") return { help: true };
+		if ((ENDPOINT_ONLY_FLAGS as readonly string[]).includes(arg)) endpointFlags.push(arg);
 		if (arg === "--force") {
 			force = true;
 			continue;
@@ -99,6 +119,7 @@ export function parseLingConfigureArgs(args: string[]): LingConfigureOptions | {
 		const valueFlags = [
 			"--base-url",
 			"--profile",
+			"--upstream",
 			"--model-id",
 			"--api-key-env",
 			"--dialect",
@@ -113,8 +134,14 @@ export function parseLingConfigureArgs(args: string[]): LingConfigureOptions | {
 				baseUrl = value;
 				break;
 			case "--profile":
-				if (value !== "3.1" && value !== "3.0") throw new Error("--profile must be 3.1 or 3.0");
-				profile = value;
+				if (!Object.hasOwn(LING_PROFILES, value)) throw new Error("--profile must be 3.1, 3.0, or 3.0-vl");
+				profile = value as LingProfile;
+				break;
+			case "--upstream":
+				if (!/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9._-]+)?$/.test(value)) {
+					throw new Error("--upstream must be an OpenRouter provider slug such as novita or deepinfra/fp4");
+				}
+				upstream = value;
 				break;
 			case "--model-id":
 				modelId = value;
@@ -137,7 +164,13 @@ export function parseLingConfigureArgs(args: string[]): LingConfigureOptions | {
 		}
 	}
 
-	if (!baseUrl) throw new Error("--base-url is required; Ling Code does not choose a hosted endpoint implicitly");
+	if (!baseUrl) {
+		if (endpointFlags.length > 0) {
+			throw new Error(`${endpointFlags[0]} applies only to a self-hosted endpoint; add --base-url <url>`);
+		}
+		return { target: "openrouter", profile, upstream: upstream ?? LING_PROFILES[profile].openRouterUpstream };
+	}
+	if (upstream) throw new Error("--upstream applies only to OpenRouter; remove --base-url");
 	let url: URL;
 	try {
 		url = new URL(baseUrl);
@@ -154,16 +187,23 @@ export function parseLingConfigureArgs(args: string[]): LingConfigureOptions | {
 		throw new Error("--api-key-env must be a valid environment variable name");
 	}
 	if (maxTokens > contextWindow) throw new Error("--max-tokens must not exceed --context-window");
-	const selectedModelId = modelId ?? PROFILES[profile].modelId;
+	const selectedModelId = modelId ?? LING_PROFILES[profile].endpointModelId;
 	if (!selectedModelId.trim() || /[\r\n\0]/.test(selectedModelId)) throw new Error("--model-id must be non-empty");
 	const modelGeneration = selectedModelId.match(/ling[-_/]?3\.([01])(?:[-_./]|$)/i)?.[1];
-	if (modelGeneration && `3.${modelGeneration}` !== profile) {
+	if (modelGeneration && !profile.startsWith(`3.${modelGeneration}`)) {
 		throw new Error(
 			`--model-id indicates Ling 3.${modelGeneration} but --profile is ${profile}; select the matching profile`,
 		);
 	}
+	const modelIsVision = /[-_]vl(?:[-_./]|$)/i.test(selectedModelId);
+	if (modelGeneration && modelIsVision !== (profile === "3.0-vl")) {
+		throw new Error(
+			`--model-id ${modelIsVision ? "is" : "is not"} a vision model but --profile is ${profile}; select the matching profile`,
+		);
+	}
 
 	return {
+		target: "endpoint",
 		baseUrl: baseUrl.replace(/\/+$/, ""),
 		profile,
 		modelId: selectedModelId,
@@ -204,18 +244,9 @@ async function loadModelsFile(modelsPath: string): Promise<ModelsFile> {
 	return { ...(parsed as { $schema?: string }), providers: providers as Record<string, ModelsJsonProvider> };
 }
 
-export async function configureLing(
-	options: LingConfigureOptions,
-	settingsManager: SettingsManager,
-	modelsPath: string,
-): Promise<{ modelId: string; modelsPath: string }> {
-	const config = await loadModelsFile(modelsPath);
-	if (config.providers[LING_PROVIDER_ID] && !options.force) {
-		throw new Error(`Provider "${LING_PROVIDER_ID}" already exists in ${modelsPath}; use --force to replace it`);
-	}
-	const profile = PROFILES[options.profile];
-	const modelId = options.modelId ?? profile.modelId;
-	const provider: ModelsJsonProvider = {
+function createEndpointProvider(options: LingEndpointConfigureOptions): ModelsJsonProvider {
+	const profile = LING_PROFILES[options.profile];
+	return {
 		name: "Ling (configured endpoint)",
 		baseUrl: options.baseUrl,
 		apiKey: `$${options.apiKeyEnv}`,
@@ -228,21 +259,64 @@ export async function configureLing(
 		},
 		models: [
 			{
-				id: modelId,
+				id: options.modelId,
 				name: profile.name,
 				reasoning: true,
-				input: ["text"],
+				input: [...profile.input],
 				contextWindow: options.contextWindow,
 				maxTokens: options.maxTokens,
-				samplingParams: {
-					temperature: profile.temperature,
-					top_p: 0.95,
-					top_k: 20,
-				},
+				samplingParams: { ...profile.samplingParams },
 			},
 		],
 	};
-	config.providers[LING_PROVIDER_ID] = provider;
+}
+
+/**
+ * Adds vendor sampling and an exclusive upstream pin to the built-in OpenRouter model, preserving other
+ * overrides, other compat fields, and provider settings.
+ */
+function withOpenRouterProfile(
+	existing: ModelsJsonProvider | undefined,
+	options: LingOpenRouterConfigureOptions,
+): ModelsJsonProvider {
+	const { openRouterModelId, samplingParams } = LING_PROFILES[options.profile];
+	const override = existing?.modelOverrides?.[openRouterModelId];
+	return {
+		...existing,
+		modelOverrides: {
+			...existing?.modelOverrides,
+			[openRouterModelId]: {
+				...override,
+				samplingParams: { ...samplingParams },
+				compat: {
+					...override?.compat,
+					openRouterRouting: { only: [options.upstream], allow_fallbacks: false },
+				},
+			},
+		},
+	};
+}
+
+export async function configureLing(
+	options: LingConfigureOptions,
+	settingsManager: SettingsManager,
+	modelsPath: string,
+): Promise<{ provider: string; modelId: string; modelsPath: string }> {
+	const config = await loadModelsFile(modelsPath);
+	let provider: string;
+	let modelId: string;
+	if (options.target === "openrouter") {
+		provider = LING_OPENROUTER_PROVIDER_ID;
+		modelId = LING_PROFILES[options.profile].openRouterModelId;
+		config.providers[provider] = withOpenRouterProfile(config.providers[provider], options);
+	} else {
+		provider = LING_ENDPOINT_PROVIDER_ID;
+		modelId = options.modelId;
+		if (config.providers[provider] && !options.force) {
+			throw new Error(`Provider "${provider}" already exists in ${modelsPath}; use --force to replace it`);
+		}
+		config.providers[provider] = createEndpointProvider(options);
+	}
 	const directory = dirname(modelsPath);
 	await mkdir(directory, { recursive: true });
 	const temporaryPath = join(directory, `.${basename(modelsPath)}.${process.pid}.${randomUUID()}.tmp`);
@@ -252,14 +326,14 @@ export async function configureLing(
 	} finally {
 		await rm(temporaryPath, { force: true });
 	}
-	settingsManager.setDefaultModelAndProvider(LING_PROVIDER_ID, modelId);
+	settingsManager.setDefaultModelAndProvider(provider, modelId);
 	await settingsManager.flush();
 	const settingsErrors = settingsManager.drainErrors();
 	if (settingsErrors.length > 0) {
 		const detail = settingsErrors.map(({ error }) => error.message).join("; ");
 		throw new Error(`${modelsPath} was updated, but settings could not be saved: ${detail}`);
 	}
-	return { modelId, modelsPath };
+	return { provider, modelId, modelsPath };
 }
 
 export async function runLingConfigureCommand(
@@ -276,8 +350,12 @@ export async function runLingConfigureCommand(
 		const modelsPath = join(context.agentDir, "models.json");
 		const settingsManager = SettingsManager.create(context.cwd, context.agentDir, { projectTrusted: false });
 		const result = await configureLing(options, settingsManager, modelsPath);
-		console.log(`Configured ${LING_PROVIDER_ID}/${result.modelId} in ${result.modelsPath}`);
-		console.log(`Set the API key through $${options.apiKeyEnv}; no credential was written to disk.`);
+		console.log(`Configured ${result.provider}/${result.modelId} in ${result.modelsPath}`);
+		console.log(
+			options.target === "openrouter"
+				? `Pinned to OpenRouter upstream ${options.upstream} without fallbacks. Authenticate with $OPENROUTER_API_KEY or /login; no credential was written to disk.`
+				: `Set the API key through $${options.apiKeyEnv}; no credential was written to disk.`,
+		);
 	} catch (error) {
 		console.error(chalk.red(`Error: ${error instanceof Error ? error.message : error}`));
 		process.exitCode = 1;

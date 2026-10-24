@@ -10,11 +10,11 @@
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-# Ling Code
+# Bling Code
 
-Ling Code is a full fork of [Pi](https://github.com/earendil-works/pi), configured for Ling 3.1 Flash with an explicitly selectable Ling 3.0 profile. It retains Pi's minimal, extensible agent harness, CLI/TUI, tools, sessions, compaction, extensions, skills, prompt templates, and themes.
+Bling Code is a full fork of [Pi](https://github.com/earendil-works/pi), configured for Ling 3.1 Flash with explicitly selectable Ling 3.0 and Ling 3.0 VL profiles. It retains Pi's minimal, extensible agent harness, CLI/TUI, tools, sessions, compaction, extensions, skills, prompt templates, and themes.
 
-Ling Code requires an explicit OpenAI-compatible endpoint. It does not choose a hosted provider, embed credentials, or silently substitute another Ling version.
+Bling Code uses Ling through [OpenRouter](https://openrouter.ai/inclusionai) by default, with an optional self-hosted OpenAI-compatible endpoint. It does not embed credentials or silently substitute another model or Ling version.
 
 **Read [LING.md](LING.md) for endpoint setup, model profiles, serving requirements, verification boundaries, and Pi migration instructions.**
 
@@ -27,23 +27,24 @@ npm install --ignore-scripts
 npm run build
 ```
 
-Configure a local vLLM or SGLang endpoint:
+Get an [OpenRouter](https://openrouter.ai) API key and select Ling 3.1 Flash with its recommended sampling:
 
 ```bash
-export LING_API_KEY=local-development-key
-node packages/coding-agent/dist/bundle/cli.js configure \
-  --base-url http://localhost:30000/v1 \
-  --dialect chat-template
+export OPENROUTER_API_KEY='your-openrouter-key'
+node packages/coding-agent/dist/bundle/cli.js configure
+node packages/coding-agent/dist/bundle/cli.js doctor
 ```
 
-Start Ling Code in the directory where you want it to work:
+Use `--profile 3.0` or `--profile 3.0-vl` for Ling 3.0 Flash or its vision variant. To use a self-hosted vLLM or SGLang server instead, see [LING.md](LING.md#self-hosted-endpoint).
+
+Start Bling Code in the directory where you want it to work:
 
 ```bash
 cd /path/to/project
-node /path/to/ling-code/packages/coding-agent/dist/bundle/cli.js
+node /path/to/bling-code/packages/coding-agent/dist/bundle/cli.js
 ```
 
-Use Ling Code [interactively](packages/coding-agent/docs/usage.md), automate it in [print or JSON mode](packages/coding-agent/docs/cli.md), control it over [RPC](packages/coding-agent/docs/rpc.md), or build apps with the [Pi TypeScript SDK](packages/coding-agent/docs/sdk.md). The upstream Pi documentation remains the reference for inherited harness functionality.
+Use Bling Code [interactively](packages/coding-agent/docs/usage.md), automate it in [print or JSON mode](packages/coding-agent/docs/cli.md), control it over [RPC](packages/coding-agent/docs/rpc.md), or build apps with the [Pi TypeScript SDK](packages/coding-agent/docs/sdk.md). The upstream Pi documentation remains the reference for inherited harness functionality.
 
 ## Run with Nix
 

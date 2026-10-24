@@ -1,14 +1,12 @@
 import { compare, valid } from "semver";
+import { ENV_UPDATE_CHECK, isTruthyEnvFlag, PACKAGE_NAME } from "../config.ts";
 import { fetchWithRetry } from "./management-http.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
-const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
 	version: string;
-	packageName?: string;
-	note?: string;
 }
 
 /** Include useful errno details hidden behind Node's generic "fetch failed" error. */
@@ -55,7 +53,7 @@ export async function getLatestPiRelease(
 	if (process.env.PI_OFFLINE) return undefined;
 
 	const response = await fetchWithRetry(
-		LATEST_VERSION_URL,
+		`https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/latest`,
 		{
 			headers: {
 				"User-Agent": getPiUserAgent(currentVersion),
@@ -67,24 +65,15 @@ export async function getLatestPiRelease(
 			timeoutMs: options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS,
 		},
 	);
+	if (response.status === 404) throw new Error(`${PACKAGE_NAME} is not published on npm`);
 	if (!response.ok) return undefined;
 
-	const data = (await response.json()) as {
-		packageName?: unknown;
-		version?: unknown;
-		note?: unknown;
-	};
+	// Only `version` is trusted from the response.
+	const data = (await response.json()) as { version?: unknown };
 	if (typeof data.version !== "string" || !data.version.trim()) {
 		return undefined;
 	}
-	const packageName =
-		typeof data.packageName === "string" && data.packageName.trim() ? data.packageName.trim() : undefined;
-	const note = typeof data.note === "string" && data.note.trim() ? data.note.trim() : undefined;
-	return {
-		version: data.version.trim(),
-		packageName,
-		...(note ? { note } : {}),
-	};
+	return { version: data.version.trim() };
 }
 
 export async function getLatestPiVersion(
@@ -95,7 +84,7 @@ export async function getLatestPiVersion(
 }
 
 export async function checkForNewPiVersion(currentVersion: string): Promise<LatestPiRelease | undefined> {
-	if (process.env.PI_SKIP_VERSION_CHECK) return undefined;
+	if (!isTruthyEnvFlag(process.env[ENV_UPDATE_CHECK]) || process.env.PI_SKIP_VERSION_CHECK) return undefined;
 
 	try {
 		const latestRelease = await getLatestPiRelease(currentVersion);

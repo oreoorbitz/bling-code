@@ -10,6 +10,7 @@ import { CacheWarmer } from "./cache-warmer.ts";
 import { getClientIdentity } from "./client-identity.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
+import { isLingModelRef } from "./ling-models.ts";
 import { createToolNameMatcher } from "./mcp-servers.ts";
 import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
@@ -233,7 +234,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// A Ling session is an explicit model contract just like a Ling saved default. Without an
 	// explicit override, never continue its transcript on another provider or Ling generation.
-	const mustRestoreLingModel = !model && hasExistingSession && sessionModel?.provider === "ling";
+	const mustRestoreLingModel =
+		!model && hasExistingSession && isLingModelRef(sessionModel?.provider, sessionModel?.modelId);
 
 	// If still no model, use findInitialModel (checks settings default, then provider defaults)
 	if (!model && !mustRestoreLingModel) {

@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "vitest";
 import { createHost, ipcLink, isChordError } from "../src/index.ts";
 import { type ControlMessage, createHostManager, type Driver, forkDriver, processLock } from "../src/manager.ts";
 import { Echo } from "./fixtures/echo.ts";
 
 const entry = fileURLToPath(new URL("./fixtures/worker.ts", import.meta.url));
+// Child processes do not get vitest aliases; preload the workspace source resolver so @earendil-works/* resolve to source, not unbuilt dist.
+const sourceResolver = pathToFileURL(
+	fileURLToPath(new URL("../../coding-agent/src/experimental/source-resolver.ts", import.meta.url)),
+).href;
 const scratch = (name: string) => join(tmpdir(), `chord2-${process.pid}-${name}`);
 
 const alive = (pid: number): boolean => {
@@ -21,7 +25,13 @@ const alive = (pid: number): boolean => {
 };
 
 const driver = (env: Record<string, string> = {}, lock?: string): Driver =>
-	forkDriver({ entry, env: { HOST_NAME: "w1", ...env }, init: { greeting: "hi" }, lock });
+	forkDriver({
+		entry,
+		execArgv: ["--import", sourceResolver],
+		env: { HOST_NAME: "w1", ...env },
+		init: { greeting: "hi" },
+		lock,
+	});
 
 describe("processLock", () => {
 	// A socket path over 104 bytes failed with EINVAL on macOS when TMPDIR was deep (./test.sh below macOS's TMPDIR).

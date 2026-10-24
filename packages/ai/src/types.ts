@@ -590,6 +590,8 @@ export interface AssistantMessage {
 	model: string;
 	responseModel?: string; // Concrete model reported by the provider, when reported. May equal the requested `model`
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
+	/** Upstream host that actually served the response, when the API reports one (e.g. OpenRouter's top-level `provider`, such as "Novita"). Absent when not reported. */
+	responseProvider?: string;
 	/** Exact provider-native effort level used for this response. Absent for legacy or unmanaged responses. */
 	providerThinkingLevel?: string;
 	/** Pi thinking level the agent loop requested for this response. Absent outside the agent loop and for legacy responses. */

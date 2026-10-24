@@ -233,7 +233,7 @@ function validateInstallerArtifacts(packageJsonPath, packageLockPath, version) {
 		packageLock.lockfileVersion !== 3 ||
 		packageLock.version !== version ||
 		root?.version !== version ||
-		root.dependencies?.["@earendil-works/pi-coding-agent"] !== version
+		root.dependencies?.blingcode !== version
 	) {
 		throw new Error(`Installer package-lock.json must describe Pi ${version}`);
 	}
