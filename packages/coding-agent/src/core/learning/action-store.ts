@@ -187,6 +187,8 @@ export interface LearningMessageAction {
 	/** Sanitized message as recorded; credential-shaped fields are redacted. */
 	message: AgentMessage;
 	harnessProfile?: HarnessProfile;
+	/** Benchmark run that spawned this session, from BLING_BENCHMARK_RUN_ID. */
+	benchmarkRunId?: string;
 }
 
 export interface LearningToolAction {
@@ -205,6 +207,7 @@ export interface LearningToolAction {
 	parentActionId?: string;
 	durationMs?: number;
 	harnessProfile?: HarnessProfile;
+	benchmarkRunId?: string;
 }
 
 export interface BenchmarkOracleCheckResult {
@@ -236,6 +239,8 @@ export interface LearningBenchmarkActionInput {
 	definitionFileHashAfter?: string;
 	integrityPassed?: boolean;
 	harnessProfile?: HarnessProfile;
+	runId?: string;
+	armId?: string;
 }
 
 export interface LearningBenchmarkAction extends LearningBenchmarkActionInput {
@@ -247,7 +252,141 @@ export interface LearningBenchmarkAction extends LearningBenchmarkActionInput {
 	timestamp: number;
 }
 
-export type LearningActionRecord = LearningMessageAction | LearningToolAction | LearningBenchmarkAction;
+export interface LearningSubagentUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: number;
+	/** Reasoning tokens, a subset of `output`. Absent when the provider reported no breakdown. */
+	reasoning?: number;
+}
+
+export interface LearningSubagentOracle {
+	command: string;
+	args: string[];
+	exitCode: number | null;
+	passed: boolean;
+	timedOut: boolean;
+	durationMs: number;
+}
+
+export interface LearningSubagentActionInput {
+	runId: string;
+	role: "scout" | "coder";
+	roleName: string;
+	roleIdentityHash: string;
+	provider: string;
+	model: string;
+	requestedUpstream?: string;
+	servedUpstreams: string[];
+	outcome: string;
+	error?: string;
+	usage: LearningSubagentUsage;
+	turns: number;
+	startedAt: number;
+	durationMs: number;
+	targetPath?: string;
+	oracle?: LearningSubagentOracle;
+	diffSha256?: string;
+	/** Changed lines (added plus removed) in the coder's target. */
+	diffLines?: number;
+	/** Set when the coder ended with `escalate`. */
+	escalationReason?: "scope_expansion" | "unresolved_failure" | "ambiguous_spec";
+	scopeViolations: number;
+	/** Milliseconds until the first assistant message that contained a tool call. */
+	timeToFirstToolCallMs?: number;
+	/** Tool calls that errored or were blocked (includes scope violations). */
+	failedToolCalls?: number;
+	parentSessionId: string;
+	parentToolCallId: string;
+	parentActionId?: string;
+	benchmarkRunId?: string;
+	harnessProfile?: HarnessProfile;
+}
+
+export interface LearningSubagentAction extends LearningSubagentActionInput {
+	version: 1;
+	actionId: string;
+	projectId: string;
+	sessionId: string;
+	kind: "subagent";
+	timestamp: number;
+}
+
+export function createSubagentAction(cwd: string, input: LearningSubagentActionInput): LearningSubagentAction {
+	const sanitized = redactSensitive(input) as LearningSubagentActionInput;
+	return {
+		...sanitized,
+		version: 1,
+		actionId: deterministicId("sub", {
+			runId: sanitized.runId,
+			parentSessionId: sanitized.parentSessionId,
+			parentToolCallId: sanitized.parentToolCallId,
+		}),
+		projectId: getProjectId(cwd),
+		sessionId: sanitized.parentSessionId,
+		kind: "subagent",
+		timestamp: input.startedAt,
+	};
+}
+
+export interface LearningSubagentVerdictActionInput {
+	/** The `runId` of the subagent run being judged (see the `subagent` record and the tool result). */
+	runId: string;
+	verdict: "accepted" | "rejected";
+	reason: string;
+	role: "scout" | "coder";
+	roleName: string;
+	/** Wall-clock time of the decision. */
+	decidedAt: number;
+	/** Session and tool call that recorded the verdict. */
+	parentSessionId: string;
+	parentToolCallId: string;
+	benchmarkRunId?: string;
+	harnessProfile?: HarnessProfile;
+}
+
+/**
+ * Ling's decision on one subagent result. Append-only: a later verdict for the same run supersedes an earlier one
+ * (the report uses the latest by timestamp).
+ */
+export interface LearningSubagentVerdictAction extends LearningSubagentVerdictActionInput {
+	version: 1;
+	actionId: string;
+	projectId: string;
+	sessionId: string;
+	kind: "subagent_verdict";
+	timestamp: number;
+}
+
+export function createSubagentVerdictAction(
+	cwd: string,
+	input: LearningSubagentVerdictActionInput,
+): LearningSubagentVerdictAction {
+	const sanitized = redactSensitive(input) as LearningSubagentVerdictActionInput;
+	return {
+		...sanitized,
+		version: 1,
+		actionId: deterministicId("verdict", {
+			runId: sanitized.runId,
+			parentSessionId: sanitized.parentSessionId,
+			parentToolCallId: sanitized.parentToolCallId,
+		}),
+		projectId: getProjectId(cwd),
+		sessionId: sanitized.parentSessionId,
+		kind: "subagent_verdict",
+		timestamp: input.decidedAt,
+	};
+}
+
+export type LearningActionRecord =
+	| LearningMessageAction
+	| LearningToolAction
+	| LearningBenchmarkAction
+	| LearningSubagentAction
+	| LearningSubagentVerdictAction;
 
 /** Build a deterministic, redacted ledger record for one executed project benchmark. */
 export function createBenchmarkAction(cwd: string, input: LearningBenchmarkActionInput): LearningBenchmarkAction {
@@ -279,6 +418,7 @@ export interface LearningToolActionInput {
 	/** Wall-clock record time; excluded from the action ID. Defaults to Date.now(). */
 	timestamp?: number;
 	harnessProfile?: HarnessProfile;
+	benchmarkRunId?: string;
 }
 
 function messageTimestamp(message: AgentMessage): number {
@@ -317,6 +457,7 @@ export function createMessageAction(
 	sessionId: string,
 	message: AgentMessage,
 	harnessProfile?: HarnessProfile,
+	benchmarkRunId?: string,
 ): LearningMessageAction {
 	const sanitized = redactSensitive(message) as AgentMessage;
 	const upstreamProvider =
@@ -335,6 +476,7 @@ export function createMessageAction(
 		...(upstreamProvider === undefined ? {} : { upstreamProvider }),
 		message: sanitized,
 		...(harnessProfile === undefined ? {} : { harnessProfile }),
+		...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
 	};
 }
 
@@ -367,6 +509,7 @@ export function createToolAction(cwd: string, sessionId: string, event: Learning
 	if (event.parentActionId !== undefined) record.parentActionId = event.parentActionId;
 	if (event.durationMs !== undefined) record.durationMs = event.durationMs;
 	if (event.harnessProfile !== undefined) record.harnessProfile = event.harnessProfile;
+	if (event.benchmarkRunId !== undefined) record.benchmarkRunId = event.benchmarkRunId;
 	return record;
 }
 

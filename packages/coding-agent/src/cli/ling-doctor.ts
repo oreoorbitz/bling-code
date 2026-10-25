@@ -11,7 +11,8 @@ import {
 	LING_PROFILES,
 } from "../core/ling-models.ts";
 import { ModelConfig, type ModelsJsonProvider } from "../core/model-config.ts";
-import { SettingsManager } from "../core/settings-manager.ts";
+import { SettingsManager, type SubagentSettings } from "../core/settings-manager.ts";
+import { activeRoleNames, validateSubagentSettings } from "../core/subagents/roles.ts";
 
 export interface LingDoctorDiagnostic {
 	level: "ok" | "warning" | "error";
@@ -220,6 +221,23 @@ export function diagnoseLingConfiguration(input: LingDoctorInput): LingDoctorDia
 	return diagnostics;
 }
 
+/** Offline checks for the `subagents` settings. Reports nothing when no roles are configured. */
+export function diagnoseSubagentConfiguration(
+	settings: SubagentSettings | undefined,
+	env: NodeJS.ProcessEnv = process.env,
+): LingDoctorDiagnostic[] {
+	if (!settings?.roles || Object.keys(settings.roles).length === 0) return [];
+	const errors = validateSubagentSettings(settings, env);
+	if (errors.length > 0) return errors.map((message) => ({ level: "error" as const, message }));
+	const active = Object.entries(activeRoleNames(settings, env)).map(([kind, name]) => `${kind}=${name}`);
+	return [
+		{
+			level: "ok",
+			message: `Subagent roles: ${Object.keys(settings.roles).length} defined, active ${active.length > 0 ? active.join(", ") : "none"}`,
+		},
+	];
+}
+
 export function printLingDoctorHelp(): void {
 	console.log(`${chalk.bold(`${APP_NAME} doctor`)} - check Ling configuration without network access
 
@@ -228,7 +246,7 @@ ${chalk.bold("Usage:")}
 
 For OpenRouter, checks the credential, the saved Ling default against the model catalog, and the
 sampling override. For a self-hosted endpoint, checks the endpoint, reasoning dialect, model limits,
-credential reference, and exact saved model selection. Credential values are never displayed and no
+credential reference, and exact saved model selection. Subagent role settings are validated too. Credential values are never displayed and no
 API request is made.`);
 }
 
@@ -269,6 +287,16 @@ export async function runLingDoctorCommand(
 							undefined,
 						catalogModelIds: new Set(getBuiltinModels(LING_OPENROUTER_PROVIDER_ID).map((model) => model.id)),
 					});
+		diagnostics.push(...diagnoseSubagentConfiguration(settings.getSettings().subagents));
+		// Reading the project file is safe; it is only inspected, never applied, here.
+		const projectSubagents = SettingsManager.create(context.cwd, context.agentDir).getProjectSettings().subagents;
+		if (projectSubagents?.scripts && Object.keys(projectSubagents.scripts).length > 0) {
+			diagnostics.push({
+				level: "warning",
+				message:
+					"Project settings define subagents.scripts; they are ignored. Define scout scripts in global settings.",
+			});
+		}
 		for (const diagnostic of diagnostics) {
 			const label = diagnostic.level === "ok" ? "OK" : diagnostic.level === "warning" ? "WARN" : "FAIL";
 			const color =

@@ -46,6 +46,11 @@ export type {
 	RetrySettings,
 	SessionShareDestination,
 	Settings,
+	SubagentBudgets,
+	SubagentRoleConfig,
+	SubagentRoleKind,
+	SubagentScriptConfig,
+	SubagentSettings,
 	TerminalSettings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
@@ -142,6 +147,16 @@ function resolveDefaultTools(entries: string[]): string[] {
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
+/**
+ * Settings a project may not set, even when trusted: `subagents.scripts` names commands subagent scouts may run,
+ * so only the user's global settings can define them. Project roles are still honored.
+ */
+function withoutProjectOnlyForbidden(projectSettings: Settings): Settings {
+	if (projectSettings.subagents?.scripts === undefined) return projectSettings;
+	const { scripts: _ignored, ...subagents } = projectSettings.subagents;
+	return { ...projectSettings, subagents };
+}
+
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	const merged = deepMergeObjects(base as Record<string, unknown>, overrides as Record<string, unknown>) as Settings;
 	const defaultTools = mergeDefaultTools(base.defaultTools, overrides.defaultTools);
@@ -538,7 +553,7 @@ export class SettingsManager {
 	}
 
 	private computeEffectiveSettings(): Settings {
-		const merged = deepMergeSettings(this.globalSettings, this.projectSettings);
+		const merged = deepMergeSettings(this.globalSettings, withoutProjectOnlyForbidden(this.projectSettings));
 		return this.harnessOverride ? deepMergeSettings(merged, { harness: this.harnessOverride }) : merged;
 	}
 

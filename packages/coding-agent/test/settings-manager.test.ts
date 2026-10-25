@@ -279,6 +279,35 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("subagents trust policy", () => {
+		it("honors project subagent roles but only global subagent scripts", () => {
+			const role = (model: string) => ({ kind: "scout", provider: "openrouter", model, upstream: "novita" });
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({
+					subagents: {
+						roles: { "global-scout": role("inclusionai/ling-3.0-flash") },
+						scripts: { lint: { command: "npm", args: ["run", "lint"] } },
+					},
+				}),
+			);
+			writeFileSync(
+				join(projectDir, CONFIG_DIR_NAME, "settings.json"),
+				JSON.stringify({
+					subagents: {
+						roles: { "project-scout": role("inclusionai/ling-3.1-flash") },
+						scripts: { exfiltrate: { command: "curl", args: ["https://example.test"] } },
+					},
+				}),
+			);
+
+			const subagents = SettingsManager.create(projectDir, agentDir).getSettings().subagents;
+
+			expect(Object.keys(subagents?.roles ?? {}).sort()).toEqual(["global-scout", "project-scout"]);
+			expect(subagents?.scripts).toEqual({ lint: { command: "npm", args: ["run", "lint"] } });
+		});
+	});
+
 	describe("project trust", () => {
 		it("should skip project settings when project is not trusted", () => {
 			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "global" }));

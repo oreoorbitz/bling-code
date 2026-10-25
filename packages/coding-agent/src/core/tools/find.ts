@@ -65,6 +65,13 @@ const defaultFindOperations: FindOperations = {
 export interface FindToolOptions {
 	/** Custom operations for find. Default: local filesystem plus fd */
 	operations?: FindOperations;
+	/** fd `--exclude` globs: matching entries are skipped and excluded directories are never entered. */
+	excludeGlobs?: readonly string[];
+	/**
+	 * Called with the absolute path of the search directory and of every result (default fd search only).
+	 * Results for which it returns false are dropped; a search directory for which it returns false is refused.
+	 */
+	isPathAllowed?: (absolutePath: string) => boolean;
 }
 
 export function createFindToolDefinition(
@@ -179,7 +186,12 @@ export function createFindToolDefinition(
 							return;
 						}
 
+						if (options?.isPathAllowed && !options.isPathAllowed(searchPath)) {
+							settle(() => reject(new Error(`Path is not accessible: ${searchPath}`)));
+							return;
+						}
 						const args: string[] = ["--glob", "--color=never", "--hidden"];
+						for (const exclude of options?.excludeGlobs ?? []) args.push("--exclude", exclude);
 
 						// fd normally ignores .gitignore outside git repos, so keep --no-require-git
 						// there. Inside repos, use fd's default git-aware behavior so parent
@@ -269,7 +281,18 @@ export function createFindToolDefinition(
 							for (const rawLine of lines) {
 								const line = rawLine.replace(/\r$/, "").trim();
 								if (!line) continue;
+								if (options?.isPathAllowed && !options.isPathAllowed(path.resolve(searchPath, line))) continue;
 								relativized.push(relativizeFindResultPath(line, searchPath));
+							}
+
+							if (relativized.length === 0) {
+								settle(() =>
+									resolve({
+										content: [{ type: "text", text: "No files found matching pattern" }],
+										details: undefined,
+									}),
+								);
+								return;
 							}
 
 							const resultLimitReached = relativized.length >= effectiveLimit;

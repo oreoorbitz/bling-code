@@ -207,6 +207,97 @@ const HarnessSettingsSchema = Type.Object({
 	),
 });
 
+const SubagentSamplingSchema = Type.Object(
+	{
+		temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
+		top_p: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+		top_k: Type.Optional(Type.Integer({ minimum: 1 })),
+		min_p: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+		repetition_penalty: Type.Optional(Type.Number({ minimum: 0 })),
+		seed: Type.Optional(Type.Integer()),
+	},
+	{ additionalProperties: false },
+);
+
+const SubagentBudgetsSchema = Type.Object(
+	{
+		maxTurns: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+		maxTotalTokens: Type.Optional(Type.Integer({ minimum: 1000 })),
+		maxContextTokens: Type.Optional(Type.Integer({ minimum: 1000 })),
+		timeoutMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 3600000 })),
+		maxCostUsd: Type.Optional(Type.Number({ minimum: 0 })),
+		maxOracleRuns: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+		maxOutputTokens: Type.Optional(
+			Type.Integer({
+				minimum: 1,
+				description:
+					"Cumulative billed output tokens (including reasoning tokens) over the run. Separate from maxTotalTokens.",
+			}),
+		),
+		maxDiffLines: Type.Optional(
+			Type.Integer({
+				minimum: 1,
+				description: "Coder only: most changed lines (added plus removed) allowed in the target file.",
+			}),
+		),
+	},
+	{ additionalProperties: false },
+);
+
+const SubagentRoleSchema = Type.Object(
+	{
+		kind: Type.Union([Type.Literal("scout"), Type.Literal("coder")]),
+		provider: Type.String({ minLength: 1 }),
+		model: Type.String({ minLength: 1 }),
+		upstream: Type.Optional(
+			Type.String({
+				minLength: 1,
+				description:
+					"OpenRouter upstream slug, such as novita or chutes/fp8. Required for the openrouter provider; fallbacks are always disabled.",
+			}),
+		),
+		zdr: Type.Optional(
+			Type.Boolean({ description: "Restrict routing to Zero Data Retention endpoints (OpenRouter provider.zdr)." }),
+		),
+		dataCollection: Type.Optional(
+			Type.Union([Type.Literal("allow"), Type.Literal("deny")], {
+				description: "OpenRouter provider.data_collection. deny: only hosts that do not collect or train on data.",
+			}),
+		),
+		contextWindow: Type.Optional(Type.Integer({ minimum: 1000 })),
+		sampling: Type.Optional(SubagentSamplingSchema),
+		thinking: Type.Optional(ModelThinkingLevelSchema),
+		budgets: Type.Optional(SubagentBudgetsSchema),
+	},
+	{ additionalProperties: false },
+);
+
+const SubagentScriptSchema = Type.Object(
+	{
+		command: Type.String({ minLength: 1 }),
+		args: Type.Optional(Type.Array(Type.String())),
+		cwd: Type.Optional(Type.String({ description: "Project-relative working directory." })),
+		timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 600000 })),
+		allowArgs: Type.Optional(Type.Boolean({ description: "Let the scout append arguments to this script." })),
+	},
+	{ additionalProperties: false },
+);
+
+const SubagentSettingsSchema = Type.Object(
+	{
+		roles: Type.Optional(Type.Record(Type.String(), SubagentRoleSchema)),
+		active: Type.Optional(
+			Type.Object(
+				{ scout: Type.Optional(Type.String()), coder: Type.Optional(Type.String()) },
+				{ additionalProperties: false },
+			),
+		),
+		armLabel: Type.Optional(Type.String({ maxLength: 64 })),
+		scripts: Type.Optional(Type.Record(Type.String(), SubagentScriptSchema)),
+	},
+	{ additionalProperties: false },
+);
+
 const PackageSourceSchema = Type.Union(
 	[
 		Type.String({ description: "Load all resources from the package." }),
@@ -427,6 +518,7 @@ export const SettingsSchema = Type.Object(
 		codemode: Type.Optional(CodemodeSettingsSchema),
 		learning: Type.Optional(LearningSettingsSchema),
 		harness: Type.Optional(HarnessSettingsSchema),
+		subagents: Type.Optional(SubagentSettingsSchema),
 		sessionDir: Type.Optional(
 			Type.String({
 				description: "Custom session storage directory, in the same format as the --session-dir CLI flag.",
@@ -517,6 +609,11 @@ export type PackageSource = Static<typeof PackageSourceSchema>;
 export type FullscreenExitOutput = NonNullable<SettingsInput["fullscreenExitOutput"]>;
 export type TuiMode = NonNullable<SettingsInput["tuiMode"]>;
 export type HarnessProfile = NonNullable<NonNullable<SettingsInput["harness"]>["profile"]>;
+export interface SubagentSettings extends Static<typeof SubagentSettingsSchema> {}
+export type SubagentRoleConfig = Static<typeof SubagentRoleSchema>;
+export type SubagentBudgets = Static<typeof SubagentBudgetsSchema>;
+export type SubagentScriptConfig = Static<typeof SubagentScriptSchema>;
+export type SubagentRoleKind = SubagentRoleConfig["kind"];
 export type CacheWarmingMode = NonNullable<SettingsInput["cacheWarming"]>;
 export interface Settings extends Omit<SettingsInput, "queueMode" | "retry" | "skills" | "websockets"> {
 	retry?: RetrySettings;

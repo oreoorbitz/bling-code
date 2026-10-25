@@ -7,11 +7,13 @@ import { CONFIG_DIR_NAME } from "../src/config.ts";
 import {
 	canonicalJson,
 	createMessageAction,
+	createSubagentAction,
 	createToolAction,
 	deterministicId,
 	getLearningPaths,
 	getProjectId,
 	LEARNING_DIRECTORY,
+	type LearningSubagentActionInput,
 	ProjectActionStore,
 	REDACTED,
 	redactSensitive,
@@ -274,6 +276,90 @@ describe("learning action store", () => {
 			expect((action.args as Record<string, unknown>).path).toBe(".env");
 			expect((action.result as Record<string, unknown>).token).toBe(REDACTED);
 			expect((action.result as Record<string, unknown>).content).toBe("the API key belongs in the environment");
+		});
+	});
+
+	describe("subagent actions", () => {
+		function subagentInput(overrides: Partial<LearningSubagentActionInput> = {}): LearningSubagentActionInput {
+			return {
+				runId: "run-1",
+				role: "scout",
+				roleName: "scout-a",
+				roleIdentityHash: "0123456789ab",
+				provider: "openrouter",
+				model: "inception/mercury-3",
+				servedUpstreams: ["Inception"],
+				outcome: "completed",
+				usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: 0.01 },
+				turns: 3,
+				startedAt: 1234,
+				durationMs: 99,
+				scopeViolations: 0,
+				parentSessionId: "session-1",
+				parentToolCallId: "call-1",
+				...overrides,
+			};
+		}
+
+		test("ids are deterministic over run and parent identifiers", () => {
+			const first = createSubagentAction(tempDir, subagentInput());
+			const again = createSubagentAction(tempDir, subagentInput({ durationMs: 5, outcome: "timeout" }));
+			expect(first.actionId).toMatch(/^sub_[0-9a-f]{32}$/);
+			expect(again.actionId).toBe(first.actionId);
+			expect(createSubagentAction(tempDir, subagentInput({ runId: "run-2" })).actionId).not.toBe(first.actionId);
+			expect(createSubagentAction(tempDir, subagentInput({ parentToolCallId: "call-2" })).actionId).not.toBe(
+				first.actionId,
+			);
+			expect(first).toMatchObject({
+				kind: "subagent",
+				version: 1,
+				sessionId: "session-1",
+				timestamp: 1234,
+				projectId: getProjectId(tempDir),
+			});
+		});
+
+		test("append is idempotent", async () => {
+			const store = ProjectActionStore.open(tempDir);
+			const action = createSubagentAction(tempDir, subagentInput());
+			expect(await store.append(action)).toBe(true);
+			expect(await store.append(createSubagentAction(tempDir, subagentInput()))).toBe(false);
+			await store.flush();
+			expect(await store.list()).toEqual([action]);
+		});
+
+		test("credential-shaped fields are redacted", () => {
+			const action = createSubagentAction(
+				tempDir,
+				subagentInput({ outcome: "error", error: "bad key ghp_0123456789abcdef0123456789abcdef0123" }),
+			);
+			expect(action.error).not.toContain("ghp_0123456789abcdef0123456789abcdef0123");
+			expect(action.error).toContain(REDACTED);
+		});
+
+		test("optional fields are omitted rather than stored as undefined", () => {
+			const action = createSubagentAction(tempDir, subagentInput());
+			for (const key of [
+				"requestedUpstream",
+				"error",
+				"targetPath",
+				"oracle",
+				"diffSha256",
+				"parentActionId",
+				"benchmarkRunId",
+				"harnessProfile",
+			]) {
+				expect(key in action).toBe(false);
+			}
+			const full = createSubagentAction(
+				tempDir,
+				subagentInput({ requestedUpstream: "inception", benchmarkRunId: "bench-run", harnessProfile: "stock" }),
+			);
+			expect(full).toMatchObject({
+				requestedUpstream: "inception",
+				benchmarkRunId: "bench-run",
+				harnessProfile: "stock",
+			});
 		});
 	});
 

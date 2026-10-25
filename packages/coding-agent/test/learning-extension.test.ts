@@ -20,6 +20,7 @@ import {
 import { ImprovementProposalStore } from "../src/core/learning/improvement.ts";
 import { ProjectMemoryStore } from "../src/core/learning/memory-store.ts";
 import type { Settings } from "../src/core/settings-manager.ts";
+import { ENV_BENCHMARK_RUN_ID } from "../src/core/subagents/roles.ts";
 import { normalizeBuildSystemPromptOptions } from "../src/core/system-prompt.ts";
 import { createProjectLearningExtension } from "../src/extensions/learning/index.ts";
 
@@ -186,6 +187,40 @@ describe("createProjectLearningExtension", () => {
 				"stock",
 				"stock",
 			]);
+		});
+	});
+
+	describe("benchmark run linkage", () => {
+		afterEach(() => {
+			vi.unstubAllEnvs();
+		});
+
+		async function recordSession() {
+			const h = setup(tempDir);
+			await h.sessionStart();
+			await h.messageEnd(assistantMessage("hi", 1000));
+			await h.toolExecutionStart({ toolCallId: "call_1000", toolName: "bash", args: {} });
+			await h.toolExecutionEnd({ toolCallId: "call_1000", toolName: "bash", result: "ok", isError: false });
+			return readLedger(tempDir);
+		}
+
+		it("tags message and tool records with the benchmark run id from the environment", async () => {
+			vi.stubEnv(ENV_BENCHMARK_RUN_ID, "run-abc");
+			const records = await recordSession();
+			expect(records.map((record) => record.kind)).toEqual(["message", "tool"]);
+			for (const record of records) {
+				expect((record as LearningMessageAction | LearningToolAction).benchmarkRunId).toBe("run-abc");
+			}
+		});
+
+		it("leaves the key absent and the action ids unchanged when the variable is unset", async () => {
+			vi.stubEnv(ENV_BENCHMARK_RUN_ID, "run-abc");
+			const tagged = await recordSession();
+			rmSync(join(tempDir, CONFIG_DIR_NAME), { recursive: true, force: true });
+			vi.stubEnv(ENV_BENCHMARK_RUN_ID, "");
+			const untagged = await recordSession();
+			for (const record of untagged) expect("benchmarkRunId" in record).toBe(false);
+			expect(untagged.map((record) => record.actionId)).toEqual(tagged.map((record) => record.actionId));
 		});
 	});
 

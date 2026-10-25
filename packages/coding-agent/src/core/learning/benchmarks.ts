@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME } from "../../config.ts";
+import { COMMAND_OUTPUT_LIMIT_CHARS, isolatedEnvironment, runCommand } from "../command-runner.ts";
 import type { HarnessProfile } from "../settings-manager.ts";
+import { ENV_BENCHMARK_ARM, ENV_BENCHMARK_RUN_ID } from "../subagents/roles.ts";
 import {
 	canonicalJson,
 	createBenchmarkAction,
@@ -14,8 +15,7 @@ import {
 import { withFileLock } from "./file-lock.ts";
 
 export const DEFAULT_BENCHMARK_TIMEOUT_MS = 120_000;
-export const BENCHMARK_OUTPUT_LIMIT_CHARS = 64_000;
-const BENCHMARK_TERMINATION_GRACE_MS = 1000;
+export const BENCHMARK_OUTPUT_LIMIT_CHARS = COMMAND_OUTPUT_LIMIT_CHARS;
 
 export interface BenchmarkOracle {
 	exitCode?: number;
@@ -196,37 +196,23 @@ function resolveBenchmarkCwd(projectCwd: string, benchmark: ProjectBenchmark): s
 	return resolved;
 }
 
-function appendBounded(current: string, chunk: string): string {
-	if (current.length >= BENCHMARK_OUTPUT_LIMIT_CHARS) return current;
-	const marker = "\n[output truncated]";
-	const remaining = BENCHMARK_OUTPUT_LIMIT_CHARS - current.length;
-	if (chunk.length <= remaining) return current + chunk;
-	return current + chunk.slice(0, Math.max(0, remaining - marker.length)) + marker;
+/** Harness-injected variables (run id, arm, role overrides). They are added after allowlisting and are not user-allowlisted. */
+function benchmarkEnvironment(
+	benchmark: ProjectBenchmark,
+	injected: Record<string, string>,
+): { env: NodeJS.ProcessEnv; keys: string[] } {
+	const base =
+		benchmark.environmentMode === "inherit" ? { ...process.env } : isolatedEnvironment(benchmark.envAllowlist).env;
+	const env: NodeJS.ProcessEnv = { ...base, ...injected };
+	return { env, keys: Object.keys(env).sort() };
 }
 
-const DEFAULT_ENVIRONMENT_KEYS = [
-	"PATH",
-	"LANG",
-	"LC_ALL",
-	"TZ",
-	"TMPDIR",
-	"TEMP",
-	"TMP",
-	"SYSTEMROOT",
-	"COMSPEC",
-	"PATHEXT",
-];
-
-function benchmarkEnvironment(benchmark: ProjectBenchmark): { env: NodeJS.ProcessEnv; keys: string[] } {
-	if (benchmark.environmentMode === "inherit") {
-		return { env: process.env, keys: Object.keys(process.env).sort() };
-	}
-	const env: NodeJS.ProcessEnv = {};
-	for (const key of [...DEFAULT_ENVIRONMENT_KEYS, ...benchmark.envAllowlist]) {
-		const value = process.env[key];
-		if (value !== undefined) env[key] = value;
-	}
-	return { env, keys: Object.keys(env).sort() };
+export interface BenchmarkRunOptions {
+	harnessProfile?: HarnessProfile;
+	/** Arm identity stored on the record and exported to the child as BLING_BENCHMARK_ARM. */
+	armId?: string;
+	/** Extra harness-injected child variables, such as the BLING_SUBAGENT_* role overrides. */
+	childEnv?: Record<string, string>;
 }
 
 async function definitionFileHash(projectCwd: string): Promise<string> {
@@ -238,47 +224,26 @@ async function executeBenchmark(
 	projectCwd: string,
 	benchmark: ProjectBenchmark,
 	control?: { command: string; args: string[]; purpose: "positive-control" | "negative-control" },
-	harnessProfile?: HarnessProfile,
+	options: BenchmarkRunOptions = {},
 ): Promise<LearningBenchmarkAction> {
+	const { harnessProfile, armId } = options;
+	const runId = randomUUID();
 	const startedAt = Date.now();
-	const startedMonotonic = performance.now();
-	let stdout = "";
-	let stderr = "";
-	let timedOut = false;
-	let spawnError: string | undefined;
 	const cwd = resolveBenchmarkCwd(projectCwd, benchmark);
 	const definitionHashBefore = await definitionFileHash(projectCwd);
-	const { env, keys: environmentKeys } = benchmarkEnvironment(benchmark);
-	const child = spawn(control?.command ?? benchmark.command, control?.args ?? benchmark.args, {
+	const { env, keys: environmentKeys } = benchmarkEnvironment(benchmark, {
+		...options.childEnv,
+		[ENV_BENCHMARK_RUN_ID]: runId,
+		...(armId === undefined ? {} : { [ENV_BENCHMARK_ARM]: armId }),
+	});
+	const { exitCode, stdout, stderr, timedOut, spawnError, durationMs } = await runCommand({
+		command: control?.command ?? benchmark.command,
+		args: control?.args ?? benchmark.args,
 		cwd,
 		env,
-		shell: false,
-		stdio: ["ignore", "pipe", "pipe"],
+		timeoutMs: benchmark.timeoutMs,
+		outputLimitChars: BENCHMARK_OUTPUT_LIMIT_CHARS,
 	});
-	child.stdout.setEncoding("utf8");
-	child.stderr.setEncoding("utf8");
-	child.stdout.on("data", (chunk: string) => {
-		stdout = appendBounded(stdout, chunk);
-	});
-	child.stderr.on("data", (chunk: string) => {
-		stderr = appendBounded(stderr, chunk);
-	});
-	child.on("error", (error) => {
-		spawnError = error.message;
-	});
-	let forceKill: NodeJS.Timeout | undefined;
-	const timeout = setTimeout(() => {
-		timedOut = true;
-		child.kill("SIGTERM");
-		forceKill = setTimeout(() => child.kill("SIGKILL"), BENCHMARK_TERMINATION_GRACE_MS);
-	}, benchmark.timeoutMs);
-	const exitCode = await new Promise<number | null>((resolveExit) => {
-		child.on("close", (code) => resolveExit(code));
-	}).finally(() => {
-		clearTimeout(timeout);
-		if (forceKill) clearTimeout(forceKill);
-	});
-	const durationMs = Math.max(0, Math.round(performance.now() - startedMonotonic));
 	let definitionHashAfter: string | undefined;
 	let integrityPassed = true;
 	try {
@@ -340,6 +305,8 @@ async function executeBenchmark(
 		integrityPassed,
 		...(spawnError ? { error: spawnError } : {}),
 		...(harnessProfile === undefined ? {} : { harnessProfile }),
+		runId,
+		...(armId === undefined ? {} : { armId }),
 	});
 }
 
@@ -434,18 +401,15 @@ export class ProjectBenchmarkStore {
 		);
 	}
 
-	async run(nameOrId: string, options: { harnessProfile?: HarnessProfile } = {}): Promise<LearningBenchmarkAction> {
+	async run(nameOrId: string, options: BenchmarkRunOptions = {}): Promise<LearningBenchmarkAction> {
 		this.definitions = await readDefinitions(this.cwd);
 		const benchmark = this.get(nameOrId);
-		const action = await executeBenchmark(this.cwd, benchmark, undefined, options.harnessProfile);
+		const action = await executeBenchmark(this.cwd, benchmark, undefined, options);
 		await ProjectActionStore.open(this.cwd).append(action);
 		return action;
 	}
 
-	async validate(
-		nameOrId: string,
-		options: { harnessProfile?: HarnessProfile } = {},
-	): Promise<BenchmarkValidationResult> {
+	async validate(nameOrId: string, options: BenchmarkRunOptions = {}): Promise<BenchmarkValidationResult> {
 		this.definitions = await readDefinitions(this.cwd);
 		const benchmark = this.get(nameOrId);
 		if (!benchmark.validation) throw new Error(`Benchmark has no validation controls: ${benchmark.name}`);
@@ -458,7 +422,7 @@ export class ProjectBenchmarkStore {
 				args: benchmark.validation.positive.args ?? [],
 				purpose: "positive-control",
 			},
-			options.harnessProfile,
+			options,
 		);
 		await actionStore.append(positive);
 		const negative = await executeBenchmark(
@@ -469,7 +433,7 @@ export class ProjectBenchmarkStore {
 				args: benchmark.validation.negative.args ?? [],
 				purpose: "negative-control",
 			},
-			options.harnessProfile,
+			options,
 		);
 		await actionStore.append(negative);
 		const negativeExecuted = negative.exitCode !== null && !negative.timedOut && !negative.error;

@@ -18,6 +18,7 @@ import { CONFIG_DIR_NAME } from "../src/config.ts";
 import {
 	createBenchmarkAction,
 	createMessageAction,
+	createSubagentAction,
 	getLearningPaths,
 	type LearningActionRecord,
 	ProjectActionStore,
@@ -368,6 +369,40 @@ describe("learning improvement", () => {
 			expect(batchPayload(faux.completeCalls[0])).toContain("parser-regression");
 			expect(result.proposals[0].evidenceActionIds).toEqual([benchmark.actionId]);
 			expect(result.proposals[0].evidence).toEqual([{ actionId: benchmark.actionId, evidenceClass: "executed" }]);
+		});
+
+		test("subagent run records are reviewable as observed evidence", async () => {
+			const subagent = createSubagentAction(tempDir, {
+				runId: "run-1",
+				role: "coder",
+				roleName: "coder-a",
+				roleIdentityHash: "0123456789ab",
+				provider: "openrouter",
+				model: "qwen/qwen3.8-27b",
+				requestedUpstream: "novita",
+				servedUpstreams: ["Novita"],
+				outcome: "passed",
+				usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: 0.01 },
+				turns: 2,
+				startedAt: 10,
+				durationMs: 25,
+				targetPath: "src/parser.ts",
+				scopeViolations: 0,
+				parentSessionId: "session-1",
+				parentToolCallId: "call-1",
+			});
+			await ProjectActionStore.open(tempDir).append(subagent);
+			const faux = createFauxRuntime();
+			faux.onComplete = () =>
+				reviewResponse([memoryAddProposal([subagent.actionId], "Coder passes on parser changes")]);
+
+			const result = await runReview(tempDir, faux);
+			expect(result.status).toBe("created");
+			if (result.status !== "created") return;
+			expect(result.actionCount).toBe(1);
+			expect(batchPayload(faux.completeCalls[0])).toContain(subagent.actionId);
+			expect(batchPayload(faux.completeCalls[0])).toContain("src/parser.ts");
+			expect(result.proposals[0].evidence).toEqual([{ actionId: subagent.actionId, evidenceClass: "observed" }]);
 		});
 
 		test("review budget also bounds oversized project memory and skill snapshots", async () => {

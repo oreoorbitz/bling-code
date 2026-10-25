@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { diagnoseLingConfiguration, diagnoseLingOpenRouterConfiguration } from "../src/cli/ling-doctor.ts";
+import {
+	diagnoseLingConfiguration,
+	diagnoseLingOpenRouterConfiguration,
+	diagnoseSubagentConfiguration,
+} from "../src/cli/ling-doctor.ts";
 import type { ModelsJsonProvider } from "../src/core/model-config.ts";
 
 function provider(overrides: Partial<ModelsJsonProvider> = {}): ModelsJsonProvider {
@@ -238,5 +242,30 @@ describe("diagnoseLingOpenRouterConfiguration", () => {
 		});
 		expect(messagesAt(diagnostics, "error")).toBe("");
 		expect(messagesAt(diagnostics, "warning")).toContain("not a Ling model");
+	});
+});
+
+describe("diagnoseSubagentConfiguration", () => {
+	const role = { kind: "scout" as const, provider: "openrouter", model: "inception/mercury-3" };
+
+	test("reports nothing without roles", () => {
+		expect(diagnoseSubagentConfiguration(undefined, {})).toEqual([]);
+	});
+
+	test("flags an invalid role", () => {
+		const diagnostics = diagnoseSubagentConfiguration({ roles: { "bad-scout": role } }, {});
+		expect(messagesAt(diagnostics, "error")).toContain("must name an upstream pin");
+	});
+
+	test("accepts a valid configuration", () => {
+		const diagnostics = diagnoseSubagentConfiguration(
+			{
+				roles: { "mercury-scout": { ...role, upstream: "inception", sampling: { temperature: 0.2 } } },
+				active: { scout: "mercury-scout" },
+			},
+			{},
+		);
+		expect(messagesAt(diagnostics, "error")).toBe("");
+		expect(diagnostics[0]?.message).toContain("scout=mercury-scout");
 	});
 });

@@ -65,6 +65,13 @@ const defaultGrepOperations: GrepOperations = {
 export interface GrepToolOptions {
 	/** Custom operations for grep. Default: local filesystem plus ripgrep */
 	operations?: GrepOperations;
+	/**
+	 * Glob exclusions (case-insensitive, matched at any depth) appended after the caller's glob so a glob argument
+	 * cannot re-include them. Excluded directories are never entered.
+	 */
+	excludeGlobs?: readonly string[];
+	/** Called with the absolute path of every match; a match for which it returns false is dropped. */
+	isPathAllowed?: (absolutePath: string) => boolean;
 }
 
 export function createGrepToolDefinition(
@@ -165,6 +172,7 @@ export function createGrepToolDefinition(
 						if (ignoreCase) args.push("--ignore-case");
 						if (literal) args.push("--fixed-strings");
 						if (glob) args.push("--glob", glob);
+						for (const exclude of options?.excludeGlobs ?? []) args.push("--iglob", `!${exclude}`);
 						args.push("--", pattern, searchPath);
 
 						const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -227,8 +235,13 @@ export function createGrepToolDefinition(
 								return;
 							}
 							if (event.type === "match") {
-								matchCount++;
 								const filePath = event.data?.path?.text;
+								if (
+									options?.isPathAllowed &&
+									!(typeof filePath === "string" && options.isPathAllowed(filePath))
+								)
+									return;
+								matchCount++;
 								const lineNumber = event.data?.line_number;
 								const lineText = event.data?.lines?.text;
 								if (filePath && typeof lineNumber === "number")

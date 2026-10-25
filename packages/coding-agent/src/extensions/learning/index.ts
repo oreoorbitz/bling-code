@@ -14,6 +14,12 @@ import {
 	stageMemoryProposal,
 } from "../../core/learning/improvement.ts";
 import { ProjectMemoryStore, renderProjectMemory } from "../../core/learning/memory-store.ts";
+import { ENV_BENCHMARK_RUN_ID } from "../../core/subagents/roles.ts";
+
+/** Benchmark run that launched this process, read at hook time so tests and children see the live env. */
+function readBenchmarkRunId(): string | undefined {
+	return process.env[ENV_BENCHMARK_RUN_ID] || undefined;
+}
 
 function readLearningSettings(pi: ExtensionAPI) {
 	const settings = pi.getSettings().learning;
@@ -77,6 +83,7 @@ export function createProjectLearningExtension(): ExtensionFactory {
 				ctx.sessionManager.getSessionId(),
 				event.message,
 				settings.harnessProfile,
+				readBenchmarkRunId(),
 			);
 			await store.append(action);
 			if (event.message.role === "assistant") {
@@ -99,6 +106,7 @@ export function createProjectLearningExtension(): ExtensionFactory {
 			if (!settings.enabled || !settings.actionLog) return;
 			const store = await getActions(ctx.cwd);
 			const parentActionId = assistantActionsByToolCall.get(event.toolCallId);
+			const benchmarkRunId = readBenchmarkRunId();
 			await store.append(
 				createToolAction(ctx.cwd, ctx.sessionManager.getSessionId(), {
 					toolCallId: event.toolCallId,
@@ -107,6 +115,7 @@ export function createProjectLearningExtension(): ExtensionFactory {
 					result: event.result,
 					isError: event.isError,
 					harnessProfile: settings.harnessProfile,
+					...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
 					...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
 					...(parentActionId === undefined ? {} : { parentActionId }),
 					...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),

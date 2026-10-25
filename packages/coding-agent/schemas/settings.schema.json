@@ -713,6 +713,205 @@
         }
       }
     },
+    "subagents": {
+      "type": "object",
+      "properties": {
+        "roles": {
+          "type": "object",
+          "patternProperties": {
+            "^.*$": {
+              "type": "object",
+              "required": [
+                "kind",
+                "provider",
+                "model"
+              ],
+              "properties": {
+                "kind": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "scout"
+                    },
+                    {
+                      "type": "string",
+                      "const": "coder"
+                    }
+                  ]
+                },
+                "provider": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "upstream": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "OpenRouter upstream slug, such as novita or chutes/fp8. Required for the openrouter provider; fallbacks are always disabled."
+                },
+                "zdr": {
+                  "type": "boolean",
+                  "description": "Restrict routing to Zero Data Retention endpoints (OpenRouter provider.zdr)."
+                },
+                "dataCollection": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "allow"
+                    },
+                    {
+                      "type": "string",
+                      "const": "deny"
+                    }
+                  ],
+                  "description": "OpenRouter provider.data_collection. deny: only hosts that do not collect or train on data."
+                },
+                "contextWindow": {
+                  "type": "integer",
+                  "minimum": 1000
+                },
+                "sampling": {
+                  "type": "object",
+                  "properties": {
+                    "temperature": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 2
+                    },
+                    "top_p": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "top_k": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "min_p": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "repetition_penalty": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "seed": {
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "thinking": {
+                  "$ref": "#/$defs/ModelThinkingLevel"
+                },
+                "budgets": {
+                  "type": "object",
+                  "properties": {
+                    "maxTurns": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 200
+                    },
+                    "maxTotalTokens": {
+                      "type": "integer",
+                      "minimum": 1000
+                    },
+                    "maxContextTokens": {
+                      "type": "integer",
+                      "minimum": 1000
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "minimum": 1000,
+                      "maximum": 3600000
+                    },
+                    "maxCostUsd": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "maxOracleRuns": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10
+                    },
+                    "maxOutputTokens": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Cumulative billed output tokens (including reasoning tokens) over the run. Separate from maxTotalTokens."
+                    },
+                    "maxDiffLines": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Coder only: most changed lines (added plus removed) allowed in the target file."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "active": {
+          "type": "object",
+          "properties": {
+            "scout": {
+              "type": "string"
+            },
+            "coder": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "armLabel": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "scripts": {
+          "type": "object",
+          "patternProperties": {
+            "^.*$": {
+              "type": "object",
+              "required": [
+                "command"
+              ],
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cwd": {
+                  "type": "string",
+                  "description": "Project-relative working directory."
+                },
+                "timeoutMs": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 600000
+                },
+                "allowArgs": {
+                  "type": "boolean",
+                  "description": "Let the scout append arguments to this script."
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "sessionDir": {
       "type": "string",
       "description": "Custom session storage directory, in the same format as the --session-dir CLI flag."

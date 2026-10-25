@@ -1,6 +1,7 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runLingBenchmarkCommand } from "../src/cli/ling-benchmark.ts";
 import {
@@ -9,7 +10,9 @@ import {
 	ProjectActionStore,
 	REDACTED,
 } from "../src/core/learning/action-store.ts";
+import { buildBenchmarkReport } from "../src/core/learning/benchmark-report.ts";
 import { BENCHMARK_OUTPUT_LIMIT_CHARS, ProjectBenchmarkStore } from "../src/core/learning/benchmarks.ts";
+import { ENV_BENCHMARK_ARM, ENV_BENCHMARK_RUN_ID, ENV_SUBAGENT_ROLE } from "../src/core/subagents/roles.ts";
 
 const tempDirs: string[] = [];
 
@@ -172,6 +175,55 @@ describe("ProjectBenchmarkStore", () => {
 		expect((await store.run("inherited-env")).stdout.trim()).toBe("secret-canary-value");
 	});
 
+	it("exports the run id and arm to the child, even in isolated mode, and stores them on the record", async () => {
+		const project = makeProject();
+		const store = await ProjectBenchmarkStore.open(project);
+		process.env.LING_BENCHMARK_SECRET = "secret-canary-value";
+		const print = `console.log(JSON.stringify([process.env.${ENV_BENCHMARK_RUN_ID}, process.env.${ENV_BENCHMARK_ARM}, process.env.${ENV_SUBAGENT_ROLE.scout}, process.env.LING_BENCHMARK_SECRET ?? null]))`;
+		await store.add({ name: "linked", ...nodeScript(print) });
+		const first = await store.run("linked", {
+			armId: "bling:test:abcd1234",
+			childEnv: { [ENV_SUBAGENT_ROLE.scout]: "scout-a" },
+		});
+		const [runId, arm, scout, secret] = JSON.parse(first.stdout.trim());
+		expect(first.runId).toMatch(/^[0-9a-f-]{36}$/);
+		expect(runId).toBe(first.runId);
+		expect(arm).toBe("bling:test:abcd1234");
+		expect(first.armId).toBe("bling:test:abcd1234");
+		expect(scout).toBe("scout-a");
+		expect(secret).toBeNull();
+		expect(first.environmentKeys).toContain(ENV_BENCHMARK_RUN_ID);
+		expect(first.environmentKeys).not.toContain("LING_BENCHMARK_SECRET");
+
+		const second = await store.run("linked");
+		expect(second.runId).not.toBe(first.runId);
+		expect(JSON.parse(second.stdout.trim())[1]).toBeNull();
+		expect("armId" in second).toBe(false);
+	});
+
+	it("injects the run id in inherit mode and for validation controls", async () => {
+		const project = makeProject();
+		const store = await ProjectBenchmarkStore.open(project);
+		const print = `console.log(process.env.${ENV_BENCHMARK_RUN_ID})`;
+		await store.add({ name: "inherit-linked", environmentMode: "inherit", ...nodeScript(print) });
+		const inherited = await store.run("inherit-linked");
+		expect(inherited.stdout.trim()).toBe(inherited.runId);
+
+		await store.add({
+			name: "controls-linked",
+			...nodeScript(""),
+			oracle: { outputIncludes: ["run-"] },
+			validation: {
+				positive: nodeScript(`console.log('run-' + process.env.${ENV_BENCHMARK_RUN_ID})`),
+				negative: nodeScript(""),
+			},
+		});
+		const validated = await store.validate("controls-linked", { armId: "bling:test:abcd1234" });
+		expect(validated.positive.stdout.trim()).toBe(`run-${validated.positive.runId}`);
+		expect(validated.positive.runId).not.toBe(validated.negative.runId);
+		expect(validated.negative.armId).toBe("bling:test:abcd1234");
+	});
+
 	it("serializes concurrent definition additions and removals", async () => {
 		const project = makeProject();
 		const stores = await Promise.all(Array.from({ length: 12 }, () => ProjectBenchmarkStore.open(project)));
@@ -254,7 +306,7 @@ interface CliResult {
 	exitCode: number | undefined;
 }
 
-async function runCli(args: string[], cwd: string): Promise<CliResult> {
+async function runCli(args: string[], cwd: string, agentDir: string = makeProject()): Promise<CliResult> {
 	const logs: string[] = [];
 	const errors: string[] = [];
 	vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => logs.push(parts.map(String).join(" ")));
@@ -262,7 +314,7 @@ async function runCli(args: string[], cwd: string): Promise<CliResult> {
 	const previous = process.exitCode;
 	process.exitCode = undefined;
 	try {
-		expect(await runLingBenchmarkCommand(args, { cwd, agentDir: makeProject() })).toBe(true);
+		expect(await runLingBenchmarkCommand(args, { cwd, agentDir })).toBe(true);
 		return { stdout: logs.join("\n"), stderr: errors.join("\n"), exitCode: process.exitCode };
 	} finally {
 		process.exitCode = previous;
@@ -398,6 +450,173 @@ describe("bling benchmark", () => {
 		const validated = await runCli(["benchmark", "validate", "cli-validation"], project);
 		expect(validated.exitCode).toBeUndefined();
 		expect(validated.stdout).toMatch(/^VALID cli-validation/);
+	});
+
+	describe("arms", () => {
+		const arms = {
+			subagents: {
+				active: { scout: "scout-a", coder: "coder-a" },
+				roles: {
+					"scout-a": {
+						kind: "scout",
+						provider: "openrouter",
+						model: "inception/mercury-3",
+						upstream: "inception",
+					},
+					"scout-b": {
+						kind: "scout",
+						provider: "openrouter",
+						model: "inception/mercury-2.5",
+						upstream: "inception",
+					},
+					"coder-a": { kind: "coder", provider: "openrouter", model: "qwen/qwen3.8-27b", upstream: "novita" },
+				},
+			},
+		};
+
+		async function armFor(project: string, agentDir: string, extra: string[]): Promise<string | undefined> {
+			const before = (await ProjectActionStore.open(project).list()).length;
+			const result = await runCli(["benchmark", "run", "arm", ...extra], project, agentDir);
+			expect(result.exitCode).toBeUndefined();
+			const actions = await ProjectActionStore.open(project).list();
+			return (actions[before] as LearningBenchmarkAction).armId;
+		}
+
+		it("--scout and --coder change the arm id and are exported to the child", async () => {
+			const project = makeProject();
+			const agentDir = makeProject();
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify(arms));
+			const print = `console.log(process.env.${ENV_SUBAGENT_ROLE.scout} + ',' + process.env.${ENV_SUBAGENT_ROLE.coder})`;
+			await runCli(["benchmark", "add", "arm", "--", process.execPath, "-e", print], project, agentDir);
+			const settingsArm = await armFor(project, agentDir, []);
+			const scoutB = await armFor(project, agentDir, ["--scout", "scout-b"]);
+			const scoutNone = await armFor(project, agentDir, ["--scout", "none"]);
+			const bothNone = await armFor(project, agentDir, ["--scout", "none", "--coder", "none"]);
+			const harnessStock = await armFor(project, agentDir, ["--harness", "stock"]);
+			const ids = [settingsArm, scoutB, scoutNone, bothNone, harnessStock];
+			expect(new Set(ids).size).toBe(5);
+			expect(bothNone).toMatch(/^bling:unlabeled:none$/);
+			expect(harnessStock).toMatch(/^stock:/);
+			// Unflagged runs export no overrides in isolated mode; flagged runs export exactly what was passed.
+			const actions = (await ProjectActionStore.open(project).list()) as LearningBenchmarkAction[];
+			expect(actions.map((action) => action.stdout.trim())).toEqual([
+				"undefined,undefined",
+				"scout-b,undefined",
+				"none,undefined",
+				"none,none",
+				"undefined,undefined",
+			]);
+		});
+
+		it("rejects an unknown role name and a missing value", async () => {
+			const project = makeProject();
+			const agentDir = makeProject();
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify(arms));
+			await runCli(["benchmark", "add", "arm", "--", process.execPath, "-e", "0"], project, agentDir);
+			const unknown = await runCli(["benchmark", "run", "arm", "--coder", "missing"], project, agentDir);
+			expect(unknown.exitCode).toBe(1);
+			expect(unknown.stderr).toContain("--coder missing: no such role");
+			const missing = await runCli(["benchmark", "run", "arm", "--scout"], project, agentDir);
+			expect(missing.exitCode).toBe(1);
+			expect(missing.stderr).toContain("--scout requires a role name");
+			expect(await ProjectActionStore.open(project).list()).toHaveLength(0);
+		});
+
+		it("lists the arm id in runs", async () => {
+			const project = makeProject();
+			const agentDir = makeProject();
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify(arms));
+			await runCli(["benchmark", "add", "arm", "--", process.execPath, "-e", "0"], project, agentDir);
+			const arm = await armFor(project, agentDir, ["--scout", "scout-b"]);
+			const runs = await runCli(["benchmark", "runs", "arm"], project, agentDir);
+			expect(runs.stdout).toContain(`\t${arm}`);
+		});
+	});
+
+	describe("report", () => {
+		const ACTION_STORE_URL = pathToFileURL(join(import.meta.dirname, "../src/core/learning/action-store.ts")).href;
+
+		/** A benchmark whose child process writes primary and subagent ledger records tagged with the injected run id. */
+		async function addAccountingBenchmark(
+			project: string,
+			agentDir: string,
+			cost: { primary: number; scout: number },
+		) {
+			const script = join(project, "child.mjs");
+			writeFileSync(
+				script,
+				`const { createMessageAction, createSubagentAction, ProjectActionStore } = await import(${JSON.stringify(ACTION_STORE_URL)});
+const cwd = process.cwd();
+const runId = process.env.${ENV_BENCHMARK_RUN_ID};
+const store = ProjectActionStore.open(cwd);
+const usage = (total) => ({ input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total } });
+await store.append(createMessageAction(cwd, 'child-' + runId, { role: 'assistant', content: [{ type: 'text', text: 'done' }], api: 'openai-completions', provider: 'openrouter', model: 'ling', usage: usage(${cost.primary}), stopReason: 'stop', timestamp: Date.now() }, 'bling', runId));
+await store.append(createSubagentAction(cwd, { runId: 'sub-' + runId, role: 'scout', roleName: 'scout-a', roleIdentityHash: '0123456789ab', provider: 'openrouter', model: 'inception/mercury-3', requestedUpstream: 'inception', servedUpstreams: ['Inception'], outcome: 'completed', usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost: ${cost.scout} }, turns: 2, startedAt: Date.now(), durationMs: 5, scopeViolations: 0, parentSessionId: 'child-' + runId, parentToolCallId: 'call-1', benchmarkRunId: runId }));
+await store.flush();
+`,
+			);
+			await runCli(["benchmark", "add", "accounted", "--", process.execPath, script], project, agentDir);
+		}
+
+		it("shows the combined cost of a run whose child wrote linked records (end to end)", async () => {
+			const project = makeProject();
+			const agentDir = makeProject();
+			await addAccountingBenchmark(project, agentDir, { primary: 0.1, scout: 0.02 });
+			const ran = await runCli(["benchmark", "run", "accounted"], project, agentDir);
+			expect(ran.exitCode).toBeUndefined();
+			expect(ran.stdout).toMatch(/^PASS accounted/);
+
+			const json = await runCli(["benchmark", "report", "accounted", "--json"], project, agentDir);
+			expect(json.exitCode).toBeUndefined();
+			const report = JSON.parse(json.stdout);
+			expect(report.arms).toHaveLength(1);
+			const [arm] = report.arms;
+			expect(arm.armId).toBe("bling:unlabeled:none");
+			expect(arm.runs).toBe(1);
+			expect(arm.passed).toBe(1);
+			expect(arm.totalCost).toBeCloseTo(0.12, 10);
+			expect(arm.costOfPass).toBeCloseTo(0.12, 10);
+			expect(arm.costByRole.primary.cost).toBeCloseTo(0.1, 10);
+			expect(arm.costByRole.scout.cost).toBeCloseTo(0.02, 10);
+			expect(arm.upstreamMismatches).toBe(0);
+			expect(arm.runsWithoutPrimaryAccounting).toBe(0);
+			// The CLI prints exactly the object the library builds.
+			expect(report).toEqual(
+				JSON.parse(JSON.stringify(buildBenchmarkReport(await ProjectActionStore.open(project).list()))),
+			);
+		});
+
+		it("prints a text block per arm and filters by benchmark", async () => {
+			const project = makeProject();
+			const agentDir = makeProject();
+			await addAccountingBenchmark(project, agentDir, { primary: 0.1, scout: 0.02 });
+			await runCli(["benchmark", "add", "plain", "--", process.execPath, "-e", "0"], project, agentDir);
+			await runCli(["benchmark", "run", "accounted"], project, agentDir);
+			await runCli(["benchmark", "run", "plain"], project, agentDir);
+
+			const all = await runCli(["benchmark", "report"], project, agentDir);
+			expect(all.stdout).toContain("bling:unlabeled:none");
+			expect(all.stdout).toContain("runs 2, passed 2");
+			const one = await runCli(["benchmark", "report", "accounted"], project, agentDir);
+			expect(one.stdout).toContain("runs 1, passed 1");
+			expect(one.stdout).toContain("cost-of-pass $0.120000");
+			expect(one.stdout).toContain("primary: 1 calls");
+			expect(one.stdout).toContain("scout: 1 calls");
+			expect(one.stdout).toContain("wall-clock p50");
+			expect(one.stdout).toContain("runs without primary accounting 0");
+			const plain = await runCli(["benchmark", "report", "plain"], project, agentDir);
+			expect(plain.stdout).toContain("runs without primary accounting 1");
+			expect(plain.stdout).toContain("no linked accounting");
+		});
+
+		it("reports nothing for a project without runs and rejects unknown options", async () => {
+			const project = makeProject();
+			const empty = await runCli(["benchmark", "report"], project);
+			expect(empty.stdout).toBe("No matching benchmark runs.");
+			const bad = await runCli(["benchmark", "report", "--bogus"], project);
+			expect(bad.exitCode).toBe(1);
+			expect(bad.stderr).toContain("Unknown benchmark report option: --bogus");
+		});
 	});
 
 	it("prints help without creating project state", async () => {

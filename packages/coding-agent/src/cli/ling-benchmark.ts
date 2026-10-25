@@ -1,10 +1,20 @@
 import { ProjectActionStore } from "../core/learning/action-store.ts";
+import { type ArmReport, buildBenchmarkReport } from "../core/learning/benchmark-report.ts";
 import {
+	type BenchmarkRunOptions,
 	DEFAULT_BENCHMARK_TIMEOUT_MS,
+	type ProjectBenchmark,
 	type ProjectBenchmarkDefinition,
 	ProjectBenchmarkStore,
 } from "../core/learning/benchmarks.ts";
 import { type HarnessProfile, SettingsManager } from "../core/settings-manager.ts";
+import {
+	armIdFromSettings,
+	ENV_SUBAGENT_ROLE,
+	ROLE_DISABLED_VALUE,
+	ROLE_KINDS,
+	type RoleKind,
+} from "../core/subagents/roles.ts";
 
 export function printLingBenchmarkHelp(): void {
 	console.log(`Project-specific executable benchmarks
@@ -14,9 +24,10 @@ Usage:
   bling benchmark add <name> [--timeout <ms>] [--expect-exit <code>]
                   [--stdout-contains <text>] [--output-excludes <text>]
                   [--allow-env <name>] [--inherit-env] -- <command> [args...]
-  bling benchmark run <name|id> [--harness <bling|stock>]
-  bling benchmark validate <name|id> [--harness <bling|stock>]
+  bling benchmark run <name|id> [--harness <bling|stock>] [--scout <role|none>] [--coder <role|none>]
+  bling benchmark validate <name|id> [--harness <bling|stock>] [--scout <role|none>] [--coder <role|none>]
   bling benchmark runs [name|id]
+  bling benchmark report [name|id] [--json]
   bling benchmark remove <name|id>
 
 Definitions live in versionable .bling/benchmarks.json. Runs execute directly without
@@ -25,7 +36,12 @@ and run_ IDs. Child environments are allowlisted by default; --allow-env adds a
 named variable and --inherit-env explicitly trusts the full caller environment.
 Validation controls can be defined in benchmarks.json. A failed oracle or integrity
 check is recorded and sets a failing command exit status. --harness labels the run with
-the harness profile arm (default: harness.profile from settings).`);
+the harness profile arm (default: harness.profile from settings). --scout and --coder
+select the subagent role for that run (a name from subagents.roles, or none to disable
+the kind) and are part of the arm identity. Each run gets a run ID and arm ID, exported to
+the child as BLING_BENCHMARK_RUN_ID and BLING_BENCHMARK_ARM even in isolated mode, so
+sessions started inside the run tag their ledger records. report groups runs by arm and
+prints cost-of-pass (total cost across roles / passed runs) and p50/p95 wall-clock.`);
 }
 
 function parseInteger(value: string | undefined, label: string): number {
@@ -94,24 +110,105 @@ function parseDefinition(args: string[]): ProjectBenchmarkDefinition {
 	};
 }
 
-function extractHarness(args: string[]): { rest: string[]; harness?: HarnessProfile } {
-	const rest: string[] = [];
-	let harness: HarnessProfile | undefined;
-	for (let index = 0; index < args.length; index++) {
-		if (args[index] !== "--harness") {
-			rest.push(args[index]);
-			continue;
-		}
-		const value = args[index + 1];
-		if (value !== "bling" && value !== "stock") throw new Error("--harness requires bling or stock");
-		harness = value;
-		index++;
-	}
-	return { rest, harness };
+interface RunFlags {
+	rest: string[];
+	harness?: HarnessProfile;
+	roles: Partial<Record<RoleKind, string>>;
 }
 
-function resolveProfile(context: { cwd: string; agentDir: string }): HarnessProfile {
-	return SettingsManager.create(context.cwd, context.agentDir).getHarnessProfile();
+function extractRunFlags(args: string[]): RunFlags {
+	const rest: string[] = [];
+	const roles: Partial<Record<RoleKind, string>> = {};
+	let harness: HarnessProfile | undefined;
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === "--harness") {
+			const value = args[index + 1];
+			if (value !== "bling" && value !== "stock") throw new Error("--harness requires bling or stock");
+			harness = value;
+			index++;
+		} else if (arg === "--scout" || arg === "--coder") {
+			const value = args[index + 1];
+			if (!value || value.startsWith("--")) throw new Error(`${arg} requires a role name or ${ROLE_DISABLED_VALUE}`);
+			roles[arg === "--scout" ? "scout" : "coder"] = value;
+			index++;
+		} else {
+			rest.push(arg);
+		}
+	}
+	return { rest, harness, roles };
+}
+
+/**
+ * Run options for one benchmark invocation: harness profile, arm ID and the harness-injected role overrides.
+ * The arm is computed from the environment the child will actually see: only the overrides in isolated mode,
+ * the caller environment plus overrides in inherit mode.
+ */
+function resolveRunOptions(
+	flags: RunFlags,
+	benchmark: ProjectBenchmark,
+	context: { cwd: string; agentDir: string },
+): BenchmarkRunOptions {
+	const settingsManager = SettingsManager.create(context.cwd, context.agentDir);
+	const harnessProfile = flags.harness ?? settingsManager.getHarnessProfile();
+	const subagents = settingsManager.getSettings().subagents;
+	const childEnv: Record<string, string> = {};
+	for (const kind of ROLE_KINDS) {
+		const name = flags.roles[kind];
+		if (name === undefined) continue;
+		if (name !== ROLE_DISABLED_VALUE && !subagents?.roles?.[name]) {
+			throw new Error(`--${kind} ${name}: no such role in subagents.roles`);
+		}
+		childEnv[ENV_SUBAGENT_ROLE[kind]] = name;
+	}
+	const armEnv = benchmark.environmentMode === "inherit" ? { ...process.env, ...childEnv } : childEnv;
+	return { harnessProfile, armId: armIdFromSettings(harnessProfile, subagents, armEnv), childEnv };
+}
+
+function formatCost(value: number): string {
+	return `$${value.toFixed(6)}`;
+}
+
+function formatArm(arm: ArmReport): string {
+	const lines = [
+		`${arm.armId}`,
+		`  runs ${arm.runs}, passed ${arm.passed}, total cost ${formatCost(arm.totalCost)}, cost-of-pass ${arm.costOfPass === null ? "n/a (no passes)" : formatCost(arm.costOfPass)}`,
+	];
+	const roles = Object.entries(arm.costByRole);
+	for (const [role, usage] of roles) {
+		lines.push(
+			`  ${role}: ${usage.calls} calls, ${formatCost(usage.cost)}, in ${usage.input} out ${usage.output}${usage.reasoning === undefined ? "" : ` (reasoning ${usage.reasoning})`} cacheRead ${usage.cacheRead} cacheWrite ${usage.cacheWrite}`,
+		);
+	}
+	if (roles.length === 0) lines.push("  no linked accounting");
+	if (arm.wallClockMs) lines.push(`  wall-clock p50 ${arm.wallClockMs.p50}ms p95 ${arm.wallClockMs.p95}ms`);
+	if (arm.passingWallClockMs) {
+		lines.push(`  wall-clock (passing) p50 ${arm.passingWallClockMs.p50}ms p95 ${arm.passingWallClockMs.p95}ms`);
+	}
+	const outcomes = Object.entries(arm.subagentOutcomes);
+	if (outcomes.length) lines.push(`  subagent outcomes: ${outcomes.map(([name, n]) => `${name}=${n}`).join(" ")}`);
+	for (const [role, stats] of Object.entries(arm.subagentStats)) {
+		const rate = (value: number | null): string => (value === null ? "n/a" : `${(value * 100).toFixed(0)}%`);
+		const ttft = stats.timeToFirstToolCallMs;
+		lines.push(
+			`  ${role} behavior: ${stats.runs} runs, acceptance ${rate(stats.acceptanceRate)} (accepted ${stats.accepted}, rejected ${stats.rejected}, unjudged ${stats.unjudged}), escalation ${rate(stats.escalationRate)} (${stats.escalations}), diff too large ${stats.diffTooLarge}, failed tool calls ${stats.failedToolCalls}, scope violations ${stats.scopeViolations}, first tool call ${ttft ? `p50 ${ttft.p50}ms p95 ${ttft.p95}ms` : "n/a"}`,
+		);
+	}
+	for (const [role, hosts] of Object.entries(arm.servedUpstreams)) {
+		lines.push(
+			`  served upstreams ${role}: ${Object.entries(hosts)
+				.map(([host, n]) => `${host}=${n}`)
+				.join(" ")}`,
+		);
+	}
+	lines.push(`  upstream mismatches ${arm.upstreamMismatches}`);
+	if (arm.zeroCostRoles.length > 0) {
+		lines.push(
+			`  WARNING zero cost with nonzero tokens (pricing missing? cost figures unreliable): ${arm.zeroCostRoles.join(", ")}`,
+		);
+	}
+	lines.push(`  runs without primary accounting ${arm.runsWithoutPrimaryAccounting}`);
+	return lines.join("\n");
 }
 
 export async function runLingBenchmarkCommand(
@@ -150,9 +247,10 @@ export async function runLingBenchmarkCommand(
 			return true;
 		}
 		if (subcommand === "run") {
-			const { rest: positional, harness } = extractHarness(rest);
+			const flags = extractRunFlags(rest);
+			const positional = flags.rest;
 			if (!positional[0]) throw new Error("bling benchmark run requires a name or ID");
-			const result = await store.run(positional[0], { harnessProfile: harness ?? resolveProfile(context) });
+			const result = await store.run(positional[0], resolveRunOptions(flags, store.get(positional[0]), context));
 			console.log(
 				`${result.passed ? "PASS" : "FAIL"} ${result.benchmarkName} ${result.actionId} exit=${result.exitCode ?? "none"} duration=${result.durationMs}ms`,
 			);
@@ -163,9 +261,13 @@ export async function runLingBenchmarkCommand(
 			return true;
 		}
 		if (subcommand === "validate") {
-			const { rest: positional, harness } = extractHarness(rest);
+			const flags = extractRunFlags(rest);
+			const positional = flags.rest;
 			if (!positional[0]) throw new Error("bling benchmark validate requires a name or ID");
-			const result = await store.validate(positional[0], { harnessProfile: harness ?? resolveProfile(context) });
+			const result = await store.validate(
+				positional[0],
+				resolveRunOptions(flags, store.get(positional[0]), context),
+			);
 			console.log(
 				`${result.passed ? "VALID" : "INVALID"} ${result.benchmark.name} positive=${result.positive.actionId} negative=${result.negative.actionId}`,
 			);
@@ -184,11 +286,26 @@ export async function runLingBenchmarkCommand(
 			for (const action of benchmarks.slice(-20).reverse()) {
 				if (action.kind === "benchmark") {
 					console.log(
-						`${action.actionId}\t${action.passed ? "PASS" : "FAIL"}\t${action.benchmarkName}\t${action.durationMs}ms\t${new Date(action.startedAt).toISOString()}\t${action.harnessProfile ?? "unrecorded"}`,
+						`${action.actionId}\t${action.passed ? "PASS" : "FAIL"}\t${action.benchmarkName}\t${action.durationMs}ms\t${new Date(action.startedAt).toISOString()}\t${action.harnessProfile ?? "unrecorded"}\t${action.armId ?? "unrecorded"}`,
 					);
 				}
 			}
 			if (benchmarks.length === 0) console.log("No matching benchmark runs.");
+			return true;
+		}
+		if (subcommand === "report") {
+			const json = rest.includes("--json");
+			const positional = rest.filter((arg) => arg !== "--json");
+			const unknown = positional.find((arg) => arg.startsWith("--"));
+			if (unknown) throw new Error(`Unknown benchmark report option: ${unknown}`);
+			const target = positional[0] ? store.get(positional[0]) : undefined;
+			const report = buildBenchmarkReport(
+				await ProjectActionStore.open(context.cwd).list(),
+				target ? { benchmarkId: target.id } : {},
+			);
+			if (json) console.log(JSON.stringify(report, null, 2));
+			else if (report.arms.length === 0) console.log("No matching benchmark runs.");
+			else console.log(report.arms.map(formatArm).join("\n\n"));
 			return true;
 		}
 		throw new Error(`Unknown benchmark subcommand: ${subcommand}`);

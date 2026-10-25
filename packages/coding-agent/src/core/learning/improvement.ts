@@ -272,7 +272,7 @@ function parseRawProposal(value: unknown, evidenceIds: Set<string>): RawProposal
 
 function proposalEvidence(action: LearningActionRecord): ProposalEvidenceClass {
 	if (action.kind === "benchmark") return "executed";
-	if (action.kind === "tool") return "observed";
+	if (action.kind === "tool" || action.kind === "subagent" || action.kind === "subagent_verdict") return "observed";
 	return action.sessionId === "project-memory-tool" ? "human" : "inferred";
 }
 

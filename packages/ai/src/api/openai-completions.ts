@@ -1578,10 +1578,12 @@ function parseChunkUsage(
 		output: outputTokens,
 		cacheRead: cacheReadTokens,
 		cacheWrite: cacheWriteTokens,
-		reasoning: rawUsage.completion_tokens_details?.reasoning_tokens || 0,
 		totalTokens: input + outputTokens + cacheReadTokens + cacheWriteTokens,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
+	// Only set when the provider reports a breakdown, so "0 reasoning tokens" and "not reported" stay distinct.
+	const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+	if (typeof reasoningTokens === "number") usage.reasoning = reasoningTokens;
 	calculateCost(model, usage);
 	if (isOpenRouterModel(model)) {
 		applyOpenRouterReportedCost(usage, rawUsage as typeof rawUsage & OpenRouterUsageAccounting);
