@@ -29,6 +29,9 @@
 - Added the role budget `maxOutputTokens` (cumulative billed output including reasoning tokens) with its own outcome `budget_output`, separate from `maxTotalTokens`.
 - Added the `subagent_verdict { runId, verdict, reason }` tool and `subagent_verdict` ledger records so Ling's accept or reject decision on each subagent result is recorded, and per-role acceptance rate (with unjudged runs) in the benchmark report.
 - Documented the round-1 scout and coder arms (including `oneshot` and `repair2` coder variants) as an example role config in `LING.md`, validated by a test.
+- Added the prompt-ablation harness profiles `bling-noverify` (no `verification_discipline` section) and `bling-lean` (also no extra Bling rules), accepted by `harness.profile`, `--harness`, and `bling benchmark run --harness`.
+- Added `subagents.delegation` (`prefer` default, `auto`, `required`), the `BLING_SUBAGENT_DELEGATION` override, and `bling benchmark run --delegation`. The `scout` and `code_file` tools now appear in the system prompt's tool list with when-to-delegate guidelines. `prefer` tells Ling to delegate and blocks its first direct `edit`/`write` of each file once with a reminder (repeating the call proceeds); `required` blocks direct edits of a file until `code_file` on it escalates or fails. The delegation mode is part of the benchmark arm identity.
+- Project ledger `message`, `tool`, `subagent`, and `subagent_verdict` records now carry `armId` (harness profile, active subagent roles, delegation mode) in every session, not only benchmark runs, so logs from ordinary use can be split by configuration.
 
 ### Changed
 

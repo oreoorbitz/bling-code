@@ -172,6 +172,7 @@ describe("subagent ledger records", () => {
 		expect(record.parentToolCallId).toBe(CALL_ID);
 		expect(record.parentActionId).toBe(createMessageAction(root, "session-1", parent, "bling").actionId);
 		expect(record.harnessProfile).toBe("bling");
+		expect(record.armId).toMatch(/^bling:/);
 		expect(record.benchmarkRunId).toBeUndefined();
 		expect("benchmarkRunId" in record).toBe(false);
 	});

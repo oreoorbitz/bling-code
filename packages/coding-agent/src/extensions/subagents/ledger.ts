@@ -8,8 +8,9 @@ import {
 	type LearningSubagentVerdictActionInput,
 	ProjectActionStore,
 } from "../../core/learning/action-store.ts";
-import type { Settings } from "../../core/settings-manager.ts";
-import { ENV_BENCHMARK_RUN_ID } from "../../core/subagents/roles.ts";
+import type { HarnessProfile, Settings } from "../../core/settings-manager.ts";
+import { harnessProfileOf } from "../../core/settings-schema.ts";
+import { armIdFromSettings, ENV_BENCHMARK_RUN_ID } from "../../core/subagents/roles.ts";
 import type { SubagentRunSummary } from "../../core/subagents/types.ts";
 
 /** Action ID of the assistant message that contains `toolCallId`, recomputed from the session branch. */
@@ -17,7 +18,7 @@ function findParentActionId(
 	ctx: ExtensionContext,
 	sessionId: string,
 	toolCallId: string,
-	harnessProfile: "bling" | "stock",
+	harnessProfile: HarnessProfile,
 ): string | undefined {
 	const branch = ctx.sessionManager.getBranch();
 	for (let index = branch.length - 1; index >= 0; index--) {
@@ -37,7 +38,7 @@ export function subagentActionInput(
 	settings: Settings,
 ): LearningSubagentActionInput {
 	const sessionId = ctx.sessionManager.getSessionId();
-	const harnessProfile = settings.harness?.profile === "stock" ? "stock" : "bling";
+	const harnessProfile = harnessProfileOf(settings);
 	const parentActionId = findParentActionId(ctx, sessionId, toolCallId, harnessProfile);
 	const benchmarkRunId = process.env[ENV_BENCHMARK_RUN_ID] || undefined;
 	const oracle = summary.coder?.oracle;
@@ -81,6 +82,7 @@ export function subagentActionInput(
 		...(parentActionId === undefined ? {} : { parentActionId }),
 		...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
 		harnessProfile,
+		armId: armIdFromSettings(harnessProfile, settings.subagents),
 	};
 }
 
@@ -118,7 +120,8 @@ export function subagentVerdictActionInput(
 		parentSessionId: ctx.sessionManager.getSessionId(),
 		parentToolCallId: toolCallId,
 		...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
-		harnessProfile: settings.harness?.profile === "stock" ? "stock" : "bling",
+		harnessProfile: harnessProfileOf(settings),
+		armId: armIdFromSettings(harnessProfileOf(settings), settings.subagents),
 	};
 }
 

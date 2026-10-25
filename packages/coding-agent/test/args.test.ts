@@ -35,7 +35,9 @@ describe("parseArgs", () => {
 
 		test("reports a missing value without consuming the next flag", () => {
 			const result = parseArgs(["--harness", "--print"]);
-			expect(result.diagnostics).toEqual([{ type: "error", message: "--harness requires bling or stock" }]);
+			expect(result.diagnostics).toEqual([
+				{ type: "error", message: "--harness requires bling, bling-noverify, bling-lean, stock" },
+			]);
 			expect(result.print).toBe(true);
 			expect(parseArgs(["--harness"]).diagnostics).toHaveLength(1);
 		});

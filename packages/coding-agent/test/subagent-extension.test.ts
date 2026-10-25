@@ -66,9 +66,9 @@ function setup(options: SetupOptions = {}) {
 	registrations.push(faux);
 	const settings = { subagents: options.subagents } as Settings;
 	const tools = new Map<string, ToolDefinition>();
-	const handlers = new Map<string, () => void>();
+	const handlers = new Map<string, (event?: unknown, ctx?: unknown) => unknown>();
 	const api = {
-		on: (event: string, handler: () => void) => handlers.set(event, handler),
+		on: (event: string, handler: (event?: unknown, ctx?: unknown) => unknown) => handlers.set(event, handler),
 		getSettings: () => settings,
 		registerTool: (definition: ToolDefinition) => tools.set(definition.name, definition),
 	} as unknown as ExtensionAPI;
@@ -91,7 +91,12 @@ function setup(options: SetupOptions = {}) {
 		if (!tool) throw new Error(`tool ${name} not registered`);
 		return tool.execute(`call-${name}`, params as never, signal, undefined, ctx as never);
 	};
-	return { faux, settings, tools, run, ctx, branch };
+	/** Fire the tool_call hook the way the agent loop does before running a built-in tool. */
+	const toolCallHook = (toolName: string, input: Record<string, unknown>) =>
+		handlers.get("tool_call")?.({ type: "tool_call", toolCallId: "t", toolName, input }, ctx) as
+			| { block?: boolean; reason?: string }
+			| undefined;
+	return { faux, settings, tools, run, ctx, branch, toolCallHook };
 }
 
 /** A session entry holding a finished subagent tool result, as the session manager stores it. */
@@ -123,8 +128,60 @@ describe("registration", () => {
 		const both = setup({ subagents: BOTH });
 		expect([...both.tools.keys()].sort()).toEqual([CODE_FILE_TOOL_NAME, SCOUT_TOOL_NAME, SUBAGENT_VERDICT_TOOL_NAME]);
 		expect(both.tools.get(CODE_FILE_TOOL_NAME)?.executionMode).toBe("sequential");
-		expect(both.tools.get(SCOUT_TOOL_NAME)?.promptGuidelines).toBeUndefined();
-		expect(both.tools.get(CODE_FILE_TOOL_NAME)?.promptGuidelines).toBeUndefined();
+		expect(both.tools.get(SCOUT_TOOL_NAME)?.promptSnippet).toContain("scout model");
+		expect(both.tools.get(CODE_FILE_TOOL_NAME)?.promptSnippet).toContain("coder model");
+	});
+
+	it("words the guidelines by delegation mode, defaulting to prefer", () => {
+		const guidelines = (delegation?: "prefer" | "auto" | "required") =>
+			setup({ subagents: { ...BOTH, ...(delegation ? { delegation } : {}) } })
+				.tools.get(CODE_FILE_TOOL_NAME)
+				?.promptGuidelines?.join("\n");
+		expect(guidelines()).toBe(guidelines("prefer"));
+		expect(guidelines("prefer")).toContain("Edit a file yourself only when it is really necessary");
+		expect(guidelines("auto")).not.toContain("blocked");
+		expect(guidelines("required")).toContain("Delegation is required in this run");
+	});
+});
+
+describe("delegation gate", () => {
+	it("prefer blocks the first direct edit of each file once, then lets it through", () => {
+		const { toolCallHook } = setup({ subagents: BOTH });
+		expect(toolCallHook("edit", { path: "src/a.ts" })?.block).toBe(true);
+		expect(toolCallHook("edit", { path: "src/a.ts" })).toBeUndefined();
+		expect(toolCallHook("write", { path: join(root, "src", "a.ts") })).toBeUndefined();
+		expect(toolCallHook("write", { path: "src/new.ts" })?.block).toBe(true);
+		expect(toolCallHook("read", { path: "src/other.ts" })).toBeUndefined();
+	});
+
+	it("auto never blocks, and no gate applies without an active coder", () => {
+		expect(setup({ subagents: { ...BOTH, delegation: "auto" } }).toolCallHook("edit", { path: "src/a.ts" })).toBe(
+			undefined,
+		);
+		expect(
+			setup({ subagents: { ...SCOUT_ONLY, delegation: "required" } }).toolCallHook("edit", { path: "src/a.ts" }),
+		).toBeUndefined();
+	});
+
+	it("never gates files code_file cannot reach, such as scratch files outside the project", () => {
+		const { toolCallHook } = setup({ subagents: { ...BOTH, delegation: "required" } });
+		expect(toolCallHook("write", { path: join(tmpdir(), "bling-probe.mjs") })).toBeUndefined();
+		expect(toolCallHook("write", { path: "../outside.mjs" })).toBeUndefined();
+	});
+
+	it("required blocks edits until code_file on that file fails", async () => {
+		const { faux, run, toolCallHook } = setup({ subagents: { ...BOTH, delegation: "required" } });
+		expect(toolCallHook("edit", { path: "src/a.ts" })?.block).toBe(true);
+		expect(toolCallHook("edit", { path: "src/a.ts" })?.block).toBe(true);
+		faux.setResponses([toolCall("finish", finish)]);
+		const result = await run(CODE_FILE_TOOL_NAME, {
+			path: "src/a.ts",
+			change: "uppercase two",
+			oracle: ORACLE_CONTAINS_TWO,
+		});
+		expect(summaryOf(result).outcome).toBe("no_change");
+		expect(toolCallHook("edit", { path: "src/a.ts" })).toBeUndefined();
+		expect(toolCallHook("edit", { path: "src/other.ts" })?.block).toBe(true);
 	});
 });
 

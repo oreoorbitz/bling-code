@@ -7,6 +7,7 @@ import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import { getToolListError, type HarnessProfile, type TuiMode } from "../core/settings-manager.ts";
+import { HARNESS_PROFILES, isHarnessProfile } from "../core/settings-schema.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -239,16 +240,16 @@ export function parseArgs(args: string[]): Args {
 			}
 		} else if (arg === "--harness") {
 			const profile = args[i + 1];
-			if (profile === "bling" || profile === "stock") {
+			if (isHarnessProfile(profile)) {
 				result.harness = profile;
 				i++;
 			} else if (profile === undefined || profile.startsWith("-")) {
-				result.diagnostics.push({ type: "error", message: "--harness requires bling or stock" });
+				result.diagnostics.push({ type: "error", message: `--harness requires ${HARNESS_PROFILES.join(", ")}` });
 			} else {
 				i++;
 				result.diagnostics.push({
 					type: "error",
-					message: `Invalid harness profile "${profile}". Valid values: bling, stock`,
+					message: `Invalid harness profile "${profile}". Valid values: ${HARNESS_PROFILES.join(", ")}`,
 				});
 			}
 		} else if (arg === "--verbose") {
@@ -358,7 +359,7 @@ ${chalk.bold("Options:")}
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
   --tui-mode <mode>              TUI mode: fullscreen (default) or regular
-  --harness <profile>            Harness profile: bling (default) or stock (upstream Pi prompt, no curated memory)
+  --harness <profile>            Harness profile: bling (default), bling-noverify, bling-lean, or stock (upstream Pi prompt, no curated memory)
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
   --offline                      Disable startup network operations (same as PI_OFFLINE=1)

@@ -106,6 +106,18 @@ describe("buildSystemPrompt", () => {
 			}
 		});
 
+		test("bling-noverify drops verification discipline; bling-lean also drops the extra rules", () => {
+			const noverify = buildSystemPrompt({ cwd: "/tmp", harnessProfile: "bling-noverify", selectedTools: [] });
+			expect(noverify).toContain("operating inside Bling Code");
+			expect(noverify).not.toContain("<verification_discipline>");
+			expect(noverify).toContain("Break complex work into verifiable steps");
+			const lean = buildSystemPrompt({ cwd: "/tmp", harnessProfile: "bling-lean", selectedTools: [] });
+			expect(lean).toContain("operating inside Bling Code");
+			expect(lean).not.toContain("<verification_discipline>");
+			expect(lean).not.toContain("Break complex work into verifiable steps");
+			expect(lean).toContain("Be concise");
+		});
+
 		test("stock custom prompt has no verification discipline, and the section name stays reserved", () => {
 			const prompt = buildSystemPrompt({ cwd: "/tmp", customPrompt: "You are Exact.", harnessProfile: "stock" });
 			expect(prompt.startsWith("You are Exact.")).toBe(true);

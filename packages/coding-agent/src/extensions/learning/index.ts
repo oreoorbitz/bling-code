@@ -14,7 +14,8 @@ import {
 	stageMemoryProposal,
 } from "../../core/learning/improvement.ts";
 import { ProjectMemoryStore, renderProjectMemory } from "../../core/learning/memory-store.ts";
-import { ENV_BENCHMARK_RUN_ID } from "../../core/subagents/roles.ts";
+import { harnessProfileOf } from "../../core/settings-schema.ts";
+import { armIdFromSettings, ENV_BENCHMARK_RUN_ID } from "../../core/subagents/roles.ts";
 
 /** Benchmark run that launched this process, read at hook time so tests and children see the live env. */
 function readBenchmarkRunId(): string | undefined {
@@ -27,7 +28,8 @@ function readLearningSettings(pi: ExtensionAPI) {
 		enabled: settings?.enabled !== false,
 		actionLog: settings?.actionLog !== false,
 		memory: settings?.memory !== false,
-		harnessProfile: pi.getSettings().harness?.profile === "stock" ? ("stock" as const) : ("bling" as const),
+		harnessProfile: harnessProfileOf(pi.getSettings()),
+		armId: armIdFromSettings(harnessProfileOf(pi.getSettings()), pi.getSettings().subagents),
 		decider: settings?.decider,
 		review: settings?.review,
 	};
@@ -84,6 +86,7 @@ export function createProjectLearningExtension(): ExtensionFactory {
 				event.message,
 				settings.harnessProfile,
 				readBenchmarkRunId(),
+				settings.armId,
 			);
 			await store.append(action);
 			if (event.message.role === "assistant") {
@@ -115,6 +118,7 @@ export function createProjectLearningExtension(): ExtensionFactory {
 					result: event.result,
 					isError: event.isError,
 					harnessProfile: settings.harnessProfile,
+					armId: settings.armId,
 					...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
 					...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
 					...(parentActionId === undefined ? {} : { parentActionId }),

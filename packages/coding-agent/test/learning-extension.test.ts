@@ -187,6 +187,11 @@ describe("createProjectLearningExtension", () => {
 				"stock",
 				"stock",
 			]);
+			// Outside benchmarks the arm ID still records the active configuration.
+			expect(records.map((record) => (record as { armId?: string }).armId)).toEqual([
+				"stock:unlabeled:none",
+				"stock:unlabeled:none",
+			]);
 		});
 	});
 

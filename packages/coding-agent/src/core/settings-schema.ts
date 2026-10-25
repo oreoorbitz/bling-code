@@ -197,13 +197,29 @@ const LearningSettingsSchema = Type.Object({
 	),
 });
 
+/** Harness profiles. The bling-* profiles are prompt ablations of "bling" for benchmark arms. */
+export const HARNESS_PROFILES = ["bling", "bling-noverify", "bling-lean", "stock"] as const;
+
+export function isHarnessProfile(value: unknown): value is (typeof HARNESS_PROFILES)[number] {
+	return typeof value === "string" && (HARNESS_PROFILES as readonly string[]).includes(value);
+}
+
+/** The configured harness profile, defaulting to "bling" when unset or unknown. */
+export function harnessProfileOf(settings: { harness?: { profile?: unknown } }): (typeof HARNESS_PROFILES)[number] {
+	const profile = settings.harness?.profile;
+	return isHarnessProfile(profile) ? profile : "bling";
+}
+
 const HarnessSettingsSchema = Type.Object({
 	profile: Type.Optional(
-		Type.Union([Type.Literal("bling"), Type.Literal("stock")], {
-			description:
-				'Harness profile. "bling" keeps Bling Code prompt additions and curated project memory. "stock" reproduces upstream Pi prompt behavior and injects no curated memory, for benchmark control runs.',
-			default: SETTINGS_DEFAULTS.harness.profile,
-		}),
+		Type.Union(
+			[Type.Literal("bling"), Type.Literal("bling-noverify"), Type.Literal("bling-lean"), Type.Literal("stock")],
+			{
+				description:
+					'Harness profile. "bling" keeps Bling Code prompt additions and curated project memory. "bling-noverify" drops the verification_discipline section. "bling-lean" also drops the extra Bling rules. "stock" reproduces upstream Pi prompt behavior and injects no curated memory, for benchmark control runs.',
+				default: SETTINGS_DEFAULTS.harness.profile,
+			},
+		),
 	),
 });
 
@@ -293,6 +309,12 @@ const SubagentSettingsSchema = Type.Object(
 			),
 		),
 		armLabel: Type.Optional(Type.String({ maxLength: 64 })),
+		delegation: Type.Optional(
+			Type.Union([Type.Literal("prefer"), Type.Literal("auto"), Type.Literal("required")], {
+				description:
+					'"prefer" (default): the parent is told to delegate, and its first direct edit or write of each file is blocked once with a reminder; repeating it proceeds. "auto": the parent decides with neutral guidance. "required": edit and write are blocked for a file until code_file on it escalates or fails, for forced-delegation benchmark arms.',
+			}),
+		),
 		scripts: Type.Optional(Type.Record(Type.String(), SubagentScriptSchema)),
 	},
 	{ additionalProperties: false },

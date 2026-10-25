@@ -188,7 +188,8 @@ export interface LearningMessageAction {
 	message: AgentMessage;
 	harnessProfile?: HarnessProfile;
 	/** Benchmark run that spawned this session, from BLING_BENCHMARK_RUN_ID. */
-	benchmarkRunId?: string;
+	benchmarkRunId?: string /** Active configuration (harness profile, subagent roles, delegation mode) as `armIdFromSettings` renders it. */;
+	armId?: string;
 }
 
 export interface LearningToolAction {
@@ -207,6 +208,8 @@ export interface LearningToolAction {
 	parentActionId?: string;
 	durationMs?: number;
 	harnessProfile?: HarnessProfile;
+	/** Active configuration (harness profile, subagent roles, delegation mode) as `armIdFromSettings` renders it. */
+	armId?: string;
 	benchmarkRunId?: string;
 }
 
@@ -304,6 +307,8 @@ export interface LearningSubagentActionInput {
 	parentActionId?: string;
 	benchmarkRunId?: string;
 	harnessProfile?: HarnessProfile;
+	/** Active configuration (harness profile, subagent roles, delegation mode) as `armIdFromSettings` renders it. */
+	armId?: string;
 }
 
 export interface LearningSubagentAction extends LearningSubagentActionInput {
@@ -346,6 +351,8 @@ export interface LearningSubagentVerdictActionInput {
 	parentToolCallId: string;
 	benchmarkRunId?: string;
 	harnessProfile?: HarnessProfile;
+	/** Active configuration (harness profile, subagent roles, delegation mode) as `armIdFromSettings` renders it. */
+	armId?: string;
 }
 
 /**
@@ -418,6 +425,8 @@ export interface LearningToolActionInput {
 	/** Wall-clock record time; excluded from the action ID. Defaults to Date.now(). */
 	timestamp?: number;
 	harnessProfile?: HarnessProfile;
+	/** Active configuration (harness profile, subagent roles, delegation mode) as `armIdFromSettings` renders it. */
+	armId?: string;
 	benchmarkRunId?: string;
 }
 
@@ -458,6 +467,7 @@ export function createMessageAction(
 	message: AgentMessage,
 	harnessProfile?: HarnessProfile,
 	benchmarkRunId?: string,
+	armId?: string,
 ): LearningMessageAction {
 	const sanitized = redactSensitive(message) as AgentMessage;
 	const upstreamProvider =
@@ -477,6 +487,7 @@ export function createMessageAction(
 		message: sanitized,
 		...(harnessProfile === undefined ? {} : { harnessProfile }),
 		...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
+		...(armId === undefined ? {} : { armId }),
 	};
 }
 
@@ -510,6 +521,7 @@ export function createToolAction(cwd: string, sessionId: string, event: Learning
 	if (event.durationMs !== undefined) record.durationMs = event.durationMs;
 	if (event.harnessProfile !== undefined) record.harnessProfile = event.harnessProfile;
 	if (event.benchmarkRunId !== undefined) record.benchmarkRunId = event.benchmarkRunId;
+	if (event.armId !== undefined) record.armId = event.armId;
 	return record;
 }
 

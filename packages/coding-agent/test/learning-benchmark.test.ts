@@ -12,7 +12,12 @@ import {
 } from "../src/core/learning/action-store.ts";
 import { buildBenchmarkReport } from "../src/core/learning/benchmark-report.ts";
 import { BENCHMARK_OUTPUT_LIMIT_CHARS, ProjectBenchmarkStore } from "../src/core/learning/benchmarks.ts";
-import { ENV_BENCHMARK_ARM, ENV_BENCHMARK_RUN_ID, ENV_SUBAGENT_ROLE } from "../src/core/subagents/roles.ts";
+import {
+	ENV_BENCHMARK_ARM,
+	ENV_BENCHMARK_RUN_ID,
+	ENV_SUBAGENT_DELEGATION,
+	ENV_SUBAGENT_ROLE,
+} from "../src/core/subagents/roles.ts";
 
 const tempDirs: string[] = [];
 
@@ -380,7 +385,7 @@ describe("bling benchmark", () => {
 		await runCli(["benchmark", "add", "arm", "--", process.execPath, "-e", "0"], project);
 		const result = await runCli(["benchmark", "run", "arm", "--harness", "bogus"], project);
 		expect(result.exitCode).toBe(1);
-		expect(result.stderr).toContain("--harness requires bling or stock");
+		expect(result.stderr).toContain("--harness requires bling, bling-noverify, bling-lean, stock");
 		expect(await ProjectActionStore.open(project).list()).toHaveLength(0);
 	});
 
@@ -506,6 +511,38 @@ describe("bling benchmark", () => {
 				"none,none",
 				"undefined,undefined",
 			]);
+		});
+
+		it("--delegation changes the arm id, is exported to the child, and rejects unknown modes", async () => {
+			const project = makeProject();
+			const agentDir = makeProject();
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify(arms));
+			await runCli(
+				[
+					"benchmark",
+					"add",
+					"arm",
+					"--",
+					process.execPath,
+					"-e",
+					`console.log(process.env.${ENV_SUBAGENT_DELEGATION})`,
+				],
+				project,
+				agentDir,
+			);
+			const ids = [
+				await armFor(project, agentDir, []),
+				await armFor(project, agentDir, ["--delegation", "auto"]),
+				await armFor(project, agentDir, ["--delegation", "required"]),
+			];
+			expect(new Set(ids).size).toBe(3);
+			// The default mode is prefer, so an explicit prefer is the same arm as an unflagged run.
+			expect(await armFor(project, agentDir, ["--delegation", "prefer"])).toBe(ids[0]);
+			const actions = (await ProjectActionStore.open(project).list()) as LearningBenchmarkAction[];
+			expect(actions.map((action) => action.stdout.trim())).toEqual(["undefined", "auto", "required", "prefer"]);
+			const bogus = await runCli(["benchmark", "run", "arm", "--delegation", "always"], project, agentDir);
+			expect(bogus.exitCode).toBe(1);
+			expect(bogus.stderr).toContain("--delegation requires prefer, auto, required");
 		});
 
 		it("rejects an unknown role name and a missing value", async () => {

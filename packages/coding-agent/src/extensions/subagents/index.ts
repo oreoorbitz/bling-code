@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { relative } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { type Static, Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../../core/extensions/types.ts";
 import { upstreamMatches } from "../../core/learning/benchmark-report.ts";
@@ -13,6 +14,8 @@ import {
 import { CODER_SYSTEM_PROMPT, SCOUT_SYSTEM_PROMPT } from "../../core/subagents/prompts.ts";
 import {
 	activeRoleNames,
+	type DelegationMode,
+	delegationMode,
 	type ResolvedRole,
 	type RoleKind,
 	RoleResolutionError,
@@ -146,6 +149,52 @@ const VERDICT_DESCRIPTION = `Record whether you accept or reject the result of a
 - Pass the runId from the result. accepted means you used the result (a changed file counts as kept); rejected means you discarded it, redid the work yourself, or reverted the change.
 - Call it once per result after you have decided. A later call for the same runId replaces the earlier verdict.`;
 
+const SCOUT_SNIPPET = "delegate a read-only codebase question to a cheaper scout model; returns cited findings";
+const CODE_FILE_SNIPPET =
+	"delegate a change to one file to a cheaper coder model; the harness runs your check command and returns the diff";
+const VERDICT_SNIPPET = "record whether you kept a scout or code_file result";
+
+const SCOUT_GUIDELINES: Record<DelegationMode, string[]> = {
+	auto: [
+		"Use scout instead of reading files yourself when answering needs searching or reading more than about three files, for example where something is used, which modules lack tests, or how data flows between modules. Ask one specific question and give startPaths.",
+	],
+	prefer: [
+		"Delegate investigation: before reading source files yourself, call scout with one specific question and startPaths. Read files yourself only to check a finding scout marked unverified or low confidence, or when scout failed.",
+	],
+	required: [
+		"Delegation is required in this run: call scout before reading source files yourself for any question about where or how something is implemented.",
+	],
+};
+const CODE_FILE_GUIDELINES: Record<DelegationMode, string[]> = {
+	auto: [
+		"Use code_file for a change confined to one file when you can state the change and a command that checks it. Put the interface other files rely on in contract, then review the returned diff and oracle result instead of re-reading the file.",
+		"For a change spanning several files, decide the shared contract first, then call code_file once per file.",
+	],
+	prefer: [
+		"Delegate file changes: make each change with code_file, one call per file, with the interface other files rely on in contract and a command that checks it. Review the returned diff and oracle result instead of re-reading the file.",
+		"For a change spanning several files, decide the shared contract first, then call code_file once per file.",
+		"Edit a file yourself only when it is really necessary: code_file on it escalated or failed, or the change is a trivial fix to a code_file result you are keeping. Your first edit or write of a file is blocked once as a reminder; repeat it only if doing it yourself is necessary.",
+	],
+	required: [
+		"For a change spanning several files, decide the shared contract first, then call code_file once per file.",
+		"Delegation is required in this run: make every file change with code_file, one call per file. edit and write are blocked for a file until code_file on that file escalates or fails. Do not change files through bash.",
+	],
+};
+const VERDICT_GUIDELINES = ["After deciding what to do with each scout or code_file result, call subagent_verdict."];
+
+/** Real path of `path`, or of its parent joined with the name when the file does not exist yet. */
+function canonicalPath(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		try {
+			return join(realpathSync(dirname(path)), basename(path));
+		} catch {
+			return path;
+		}
+	}
+}
+
 function errorResult(message: string) {
 	return { content: [{ type: "text" as const, text: message }], details: undefined, isError: true };
 }
@@ -252,6 +301,10 @@ function projectScopeOrError(cwd: string): ProjectScope | string {
 
 export function createSubagentsExtension(extensionOptions: SubagentsExtensionOptions = {}): ExtensionFactory {
 	return (pi) => {
+		/** Files a failed or escalated code_file run released for direct edit and write under required delegation. */
+		const releasedTargets = new Set<string>();
+		/** Files whose first direct edit or write was already blocked once under "prefer" delegation. */
+		const remindedTargets = new Set<string>();
 		/** Runs the accounting hook; returns a warning instead of throwing so a ledger failure cannot fail the call. */
 		const complete = async (
 			summary: SubagentRunSummary,
@@ -428,6 +481,7 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 				else if (diffTooLarge) outcome = "diff_too_large";
 				else outcome = !changed ? "no_change" : oracleResult?.passed ? "passed" : "oracle_failed";
 			}
+			if (outcome !== "passed") releasedTargets.add(canonicalPath(scope.targetPath));
 			const summary: SubagentRunSummary = {
 				...baseSummary(role, randomUUID(), run, child.counters.scopeViolations),
 				outcome,
@@ -474,13 +528,46 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 			};
 		};
 
+		pi.on("tool_call", (event, ctx) => {
+			if (event.toolName !== "edit" && event.toolName !== "write") return undefined;
+			const subagents = pi.getSettings().subagents;
+			const mode = delegationMode(subagents);
+			if (mode === "auto" || !activeRoleNames(subagents).coder) return undefined;
+			const path = (event.input as { path?: unknown }).path;
+			const target = typeof path === "string" ? canonicalPath(resolve(ctx.cwd, path)) : undefined;
+			if (target !== undefined && releasedTargets.has(target)) return undefined;
+			// code_file cannot reach files outside the project scope (e.g. scratch probes in /tmp), so never gate them.
+			const project = projectScopeOrError(ctx.cwd);
+			if (target !== undefined && (typeof project === "string" || !project.isAllowed(target))) return undefined;
+			const name = typeof path === "string" ? path : "this file";
+			if (mode === "prefer") {
+				// One reminder per file: repeating the call is the parent's judgment that a direct edit is necessary.
+				if (target === undefined || remindedTargets.has(target)) return undefined;
+				remindedTargets.add(target);
+				return {
+					block: true,
+					reason: `Delegate this change: call ${CODE_FILE_TOOL_NAME} for ${name} with the change, contract, and a check command. If doing it yourself is really necessary, repeat the ${event.toolName} call and it will run.`,
+				};
+			}
+			return {
+				block: true,
+				reason: `Delegation is required in this run: change ${name} with ${CODE_FILE_TOOL_NAME}. ${event.toolName} is allowed for a file only after ${CODE_FILE_TOOL_NAME} on it escalated or failed.`,
+			};
+		});
+
 		pi.on("session_start", () => {
-			const active = activeRoleNames(pi.getSettings().subagents);
+			releasedTargets.clear();
+			remindedTargets.clear();
+			const subagents = pi.getSettings().subagents;
+			const active = activeRoleNames(subagents);
+			const mode = delegationMode(subagents);
 			if (active.scout) {
 				pi.registerTool({
 					name: SCOUT_TOOL_NAME,
 					label: SCOUT_TOOL_NAME,
 					description: SCOUT_DESCRIPTION,
+					promptSnippet: SCOUT_SNIPPET,
+					promptGuidelines: SCOUT_GUIDELINES[mode],
 					parameters: scoutParameters,
 					execute: (toolCallId, params, signal, _onUpdate, ctx) => runScout(toolCallId, params, signal, ctx),
 				});
@@ -490,6 +577,8 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 					name: SUBAGENT_VERDICT_TOOL_NAME,
 					label: SUBAGENT_VERDICT_TOOL_NAME,
 					description: VERDICT_DESCRIPTION,
+					promptSnippet: VERDICT_SNIPPET,
+					promptGuidelines: VERDICT_GUIDELINES,
 					parameters: verdictParameters,
 					execute: (toolCallId, params, _signal, _onUpdate, ctx) => runVerdict(toolCallId, params, ctx),
 				});
@@ -499,6 +588,8 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 					name: CODE_FILE_TOOL_NAME,
 					label: CODE_FILE_TOOL_NAME,
 					description: CODE_FILE_DESCRIPTION,
+					promptSnippet: CODE_FILE_SNIPPET,
+					promptGuidelines: CODE_FILE_GUIDELINES[mode],
 					parameters: codeFileParameters,
 					executionMode: "sequential",
 					execute: (toolCallId, params, signal, _onUpdate, ctx) => runCoder(toolCallId, params, signal, ctx),

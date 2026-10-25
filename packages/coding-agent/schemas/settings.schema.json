@@ -705,10 +705,18 @@
             },
             {
               "type": "string",
+              "const": "bling-noverify"
+            },
+            {
+              "type": "string",
+              "const": "bling-lean"
+            },
+            {
+              "type": "string",
               "const": "stock"
             }
           ],
-          "description": "Harness profile. \"bling\" keeps Bling Code prompt additions and curated project memory. \"stock\" reproduces upstream Pi prompt behavior and injects no curated memory, for benchmark control runs.",
+          "description": "Harness profile. \"bling\" keeps Bling Code prompt additions and curated project memory. \"bling-noverify\" drops the verification_discipline section. \"bling-lean\" also drops the extra Bling rules. \"stock\" reproduces upstream Pi prompt behavior and injects no curated memory, for benchmark control runs.",
           "default": "bling"
         }
       }
@@ -871,6 +879,23 @@
         "armLabel": {
           "type": "string",
           "maxLength": 64
+        },
+        "delegation": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "prefer"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            },
+            {
+              "type": "string",
+              "const": "required"
+            }
+          ],
+          "description": "\"prefer\" (default): the parent is told to delegate, and its first direct edit or write of each file is blocked once with a reminder; repeating it proceeds. \"auto\": the parent decides with neutral guidance. \"required\": edit and write are blocked for a file until code_file on it escalates or fails, for forced-delegation benchmark arms."
         },
         "scripts": {
           "type": "object",

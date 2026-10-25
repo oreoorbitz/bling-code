@@ -63,7 +63,7 @@ CLI tool options override this setting for one invocation. `--tools` with only `
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `harness.profile` | `"bling"` \| `"stock"` | `"bling"` | `bling` keeps Bling Code's prompt additions (strong-solver and oracle-gate disciplines, Bling identity, extra rules) and curated project memory. `stock` reproduces upstream Pi's system prompt and injects no curated memory or `project_memory` tool, so a run can serve as the control when benchmarking harness changes. Model selection and sampling are unchanged. The `--harness` flag overrides it for one run. |
+| `harness.profile` | `"bling"` \| `"bling-noverify"` \| `"bling-lean"` \| `"stock"` | `"bling"` | `bling` keeps Bling Code's prompt additions (strong-solver and oracle-gate disciplines, Bling identity, extra rules) and curated project memory. `bling-noverify` drops the `verification_discipline` section; `bling-lean` also drops the extra rules (prompt ablations for benchmarking). `stock` reproduces upstream Pi's system prompt and injects no curated memory or `project_memory` tool, so a run can serve as the control when benchmarking harness changes. Model selection and sampling are unchanged. The `--harness` flag overrides it for one run. |
 
 ## Sessions and context
 

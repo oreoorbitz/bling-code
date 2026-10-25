@@ -10,21 +10,22 @@ import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
-import type {
-	CacheWarmingMode,
-	CompactionModelOverride,
-	DefaultProjectTrust,
-	FullscreenExitOutput,
-	HarnessProfile,
-	MermaidRenderingMode,
-	PackageSource,
-	QuietStartup,
-	SessionShareDestination,
-	Settings,
-	ThinkingBudgetsSettings,
-	TransportSetting,
-	TuiMode,
-	WarningSettings,
+import {
+	type CacheWarmingMode,
+	type CompactionModelOverride,
+	type DefaultProjectTrust,
+	type FullscreenExitOutput,
+	type HarnessProfile,
+	isHarnessProfile,
+	type MermaidRenderingMode,
+	type PackageSource,
+	type QuietStartup,
+	type SessionShareDestination,
+	type Settings,
+	type ThinkingBudgetsSettings,
+	type TransportSetting,
+	type TuiMode,
+	type WarningSettings,
 } from "./settings-schema.ts";
 
 export type {
@@ -1281,7 +1282,8 @@ export class SettingsManager {
 	}
 
 	getHarnessProfile(): HarnessProfile {
-		return this.settings.harness?.profile === "stock" ? "stock" : SETTINGS_DEFAULTS.harness.profile;
+		const profile = this.settings.harness?.profile;
+		return isHarnessProfile(profile) ? profile : SETTINGS_DEFAULTS.harness.profile;
 	}
 
 	getTuiMode(): TuiMode {

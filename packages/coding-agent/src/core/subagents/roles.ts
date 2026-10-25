@@ -16,6 +16,8 @@ export const ENV_SUBAGENT_ROLE: Record<RoleKind, string> = {
 	scout: `${ENV_PREFIX}_SUBAGENT_SCOUT`,
 	coder: `${ENV_PREFIX}_SUBAGENT_CODER`,
 };
+/** Env override for subagents.delegation ("prefer", "auto" or "required"). */
+export const ENV_SUBAGENT_DELEGATION = `${ENV_PREFIX}_SUBAGENT_DELEGATION`;
 export const ENV_BENCHMARK_RUN_ID = `${ENV_PREFIX}_BENCHMARK_RUN_ID`;
 export const ENV_BENCHMARK_ARM = `${ENV_PREFIX}_BENCHMARK_ARM`;
 /** Env value that disables a role kind even when settings activate one (the "Ling only" arm). */
@@ -114,6 +116,25 @@ export function activeRoleNames(
 	return names;
 }
 
+export type DelegationMode = "prefer" | "auto" | "required";
+export const DELEGATION_MODES: readonly DelegationMode[] = ["prefer", "auto", "required"];
+
+export function isDelegationMode(value: unknown): value is DelegationMode {
+	return typeof value === "string" && (DELEGATION_MODES as readonly string[]).includes(value);
+}
+
+/**
+ * How strongly the parent is pushed to delegate: "prefer" (default) tells it to delegate and blocks its first direct
+ * edit of each file once, "auto" leaves the choice to it, "required" blocks direct edits until code_file fails.
+ */
+export function delegationMode(
+	settings: SubagentSettings | undefined,
+	env: NodeJS.ProcessEnv = process.env,
+): DelegationMode {
+	const value = env[ENV_SUBAGENT_DELEGATION]?.trim() || settings?.delegation;
+	return isDelegationMode(value) ? value : "prefer";
+}
+
 export function validateSubagentSettings(
 	settings: SubagentSettings | undefined,
 	env: NodeJS.ProcessEnv = process.env,
@@ -126,6 +147,10 @@ export function validateSubagentSettings(
 		const role = settings?.roles?.[name];
 		if (!role) errors.push(`active ${kind} role "${name}" is not defined in subagents.roles`);
 		else if (role.kind !== kind) errors.push(`active ${kind} role "${name}" has kind ${role.kind}`);
+	}
+	const delegationEnv = env[ENV_SUBAGENT_DELEGATION]?.trim();
+	if (delegationEnv && !isDelegationMode(delegationEnv)) {
+		errors.push(`${ENV_SUBAGENT_DELEGATION}=${delegationEnv} is not one of ${DELEGATION_MODES.join(", ")}`);
 	}
 	for (const name of Object.keys(settings?.scripts ?? {})) {
 		if (!ROLE_NAME_PATTERN.test(name)) errors.push(`subagents.scripts.${name}: name must be lowercase hyphenated`);
@@ -256,19 +281,20 @@ export function resolveRole(
 	};
 }
 
-/** Stable arm label: harness profile + armLabel + hash of the active role identities. No model lookup. */
+/** Stable arm label: harness profile + armLabel + hash of the active role identities and delegation mode. No model lookup. */
 export function armIdFromSettings(
 	harness: HarnessProfile,
 	settings: SubagentSettings | undefined,
 	env: NodeJS.ProcessEnv = process.env,
 ): string {
 	const names = activeRoleNames(settings, env);
-	const identities = ROLE_KINDS.flatMap((kind) => {
+	const identities: object[] = ROLE_KINDS.flatMap((kind) => {
 		const name = names[kind];
 		if (!name) return [];
 		const config = settings?.roles?.[name];
 		return [config ? roleIdentity(name, config) : { kind, name, missing: true }];
 	});
+	if (identities.length > 0) identities.push({ delegation: delegationMode(settings, env) });
 	const hash =
 		identities.length === 0
 			? "none"

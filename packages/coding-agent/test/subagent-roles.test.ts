@@ -8,6 +8,7 @@ import { SettingsSchema, type SubagentRoleConfig, type SubagentSettings } from "
 import {
 	activeRoleNames,
 	armIdFromSettings,
+	delegationMode,
 	deriveRoleModel,
 	type RoleModelSource,
 	RoleResolutionError,
@@ -224,6 +225,17 @@ describe("armIdFromSettings", () => {
 		expect(changed({ s: role({ dataCollection: "deny" }) })).not.toBe(id);
 		expect(changed({ s: role() }, { armLabel: "y" })).not.toBe(id);
 		expect(armIdFromSettings("stock", settings, {})).not.toBe(id);
+	});
+	test("delegation mode is part of the identity, defaulting to prefer", () => {
+		const id = armIdFromSettings("bling", settings, {});
+		expect(armIdFromSettings("bling", { ...settings, delegation: "prefer" }, {})).toBe(id);
+		expect(armIdFromSettings("bling", { ...settings, delegation: "required" }, {})).not.toBe(id);
+		expect(armIdFromSettings("bling", settings, { BLING_SUBAGENT_DELEGATION: "auto" })).not.toBe(id);
+		expect(delegationMode(undefined, {})).toBe("prefer");
+		expect(delegationMode({ delegation: "auto" }, { BLING_SUBAGENT_DELEGATION: "required" })).toBe("required");
+		expect(validateSubagentSettings(undefined, { BLING_SUBAGENT_DELEGATION: "always" })).toEqual([
+			"BLING_SUBAGENT_DELEGATION=always is not one of prefer, auto, required",
+		]);
 	});
 	test("none hash without roles", () => {
 		expect(armIdFromSettings("bling", undefined, {})).toBe("bling:unlabeled:none");

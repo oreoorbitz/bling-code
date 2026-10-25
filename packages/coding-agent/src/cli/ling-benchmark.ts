@@ -8,9 +8,14 @@ import {
 	ProjectBenchmarkStore,
 } from "../core/learning/benchmarks.ts";
 import { type HarnessProfile, SettingsManager } from "../core/settings-manager.ts";
+import { HARNESS_PROFILES, isHarnessProfile } from "../core/settings-schema.ts";
 import {
 	armIdFromSettings,
+	DELEGATION_MODES,
+	type DelegationMode,
+	ENV_SUBAGENT_DELEGATION,
 	ENV_SUBAGENT_ROLE,
+	isDelegationMode,
 	ROLE_DISABLED_VALUE,
 	ROLE_KINDS,
 	type RoleKind,
@@ -24,8 +29,8 @@ Usage:
   bling benchmark add <name> [--timeout <ms>] [--expect-exit <code>]
                   [--stdout-contains <text>] [--output-excludes <text>]
                   [--allow-env <name>] [--inherit-env] -- <command> [args...]
-  bling benchmark run <name|id> [--harness <bling|stock>] [--scout <role|none>] [--coder <role|none>]
-  bling benchmark validate <name|id> [--harness <bling|stock>] [--scout <role|none>] [--coder <role|none>]
+  bling benchmark run <name|id> [--harness <profile>] [--scout <role|none>] [--coder <role|none>] [--delegation <prefer|auto|required>]
+  bling benchmark validate <name|id> [--harness <profile>] [--scout <role|none>] [--coder <role|none>] [--delegation <prefer|auto|required>]
   bling benchmark runs [name|id]
   bling benchmark report [name|id] [--json]
   bling benchmark remove <name|id>
@@ -38,7 +43,9 @@ Validation controls can be defined in benchmarks.json. A failed oracle or integr
 check is recorded and sets a failing command exit status. --harness labels the run with
 the harness profile arm (default: harness.profile from settings). --scout and --coder
 select the subagent role for that run (a name from subagents.roles, or none to disable
-the kind) and are part of the arm identity. Each run gets a run ID and arm ID, exported to
+the kind) and are part of the arm identity. --delegation sets subagents.delegation for the run (prefer:
+delegate-first with a one-time block per file; auto: neutral; required: edit and write blocked until
+code_file escalates or fails for that file) and is part of the arm identity. Each run gets a run ID and arm ID, exported to
 the child as BLING_BENCHMARK_RUN_ID and BLING_BENCHMARK_ARM even in isolated mode, so
 sessions started inside the run tag their ledger records. report groups runs by arm and
 prints cost-of-pass (total cost across roles / passed runs) and p50/p95 wall-clock.`);
@@ -114,18 +121,25 @@ interface RunFlags {
 	rest: string[];
 	harness?: HarnessProfile;
 	roles: Partial<Record<RoleKind, string>>;
+	delegation?: DelegationMode;
 }
 
 function extractRunFlags(args: string[]): RunFlags {
 	const rest: string[] = [];
 	const roles: Partial<Record<RoleKind, string>> = {};
 	let harness: HarnessProfile | undefined;
+	let delegation: DelegationMode | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
 		if (arg === "--harness") {
 			const value = args[index + 1];
-			if (value !== "bling" && value !== "stock") throw new Error("--harness requires bling or stock");
+			if (!isHarnessProfile(value)) throw new Error(`--harness requires ${HARNESS_PROFILES.join(", ")}`);
 			harness = value;
+			index++;
+		} else if (arg === "--delegation") {
+			const value = args[index + 1];
+			if (!isDelegationMode(value)) throw new Error(`--delegation requires ${DELEGATION_MODES.join(", ")}`);
+			delegation = value;
 			index++;
 		} else if (arg === "--scout" || arg === "--coder") {
 			const value = args[index + 1];
@@ -136,7 +150,7 @@ function extractRunFlags(args: string[]): RunFlags {
 			rest.push(arg);
 		}
 	}
-	return { rest, harness, roles };
+	return { rest, harness, roles, delegation };
 }
 
 /**
@@ -161,6 +175,7 @@ function resolveRunOptions(
 		}
 		childEnv[ENV_SUBAGENT_ROLE[kind]] = name;
 	}
+	if (flags.delegation) childEnv[ENV_SUBAGENT_DELEGATION] = flags.delegation;
 	const armEnv = benchmark.environmentMode === "inherit" ? { ...process.env, ...childEnv } : childEnv;
 	return { harnessProfile, armId: armIdFromSettings(harnessProfile, subagents, armEnv), childEnv };
 }
