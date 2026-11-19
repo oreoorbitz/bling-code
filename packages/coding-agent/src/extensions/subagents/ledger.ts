@@ -3,6 +3,7 @@ import type { ExtensionContext } from "../../core/extensions/types.ts";
 import {
 	createMessageAction,
 	createSubagentAction,
+	createSubagentCapacityAction,
 	createSubagentVerdictAction,
 	type LearningSubagentActionInput,
 	type LearningSubagentVerdictActionInput,
@@ -10,6 +11,7 @@ import {
 } from "../../core/learning/action-store.ts";
 import type { HarnessProfile, Settings } from "../../core/settings-manager.ts";
 import { harnessProfileOf } from "../../core/settings-schema.ts";
+import type { CapacityEvent } from "../../core/subagents/capacity.ts";
 import { armIdFromSettings, ENV_BENCHMARK_RUN_ID } from "../../core/subagents/roles.ts";
 import type { SubagentRunSummary } from "../../core/subagents/types.ts";
 
@@ -135,4 +137,29 @@ export async function recordSubagentVerdict(
 	if (settings.learning?.enabled === false || settings.learning?.actionLog === false) return;
 	const input = subagentVerdictActionInput(verdict, ctx, toolCallId, settings);
 	await ProjectActionStore.open(ctx.cwd).append(createSubagentVerdictAction(ctx.cwd, input));
+}
+
+/** onCapacityEvent hook: one `subagent_capacity` ledger record per change of a host's learned concurrency. */
+export async function recordCapacityEvent(
+	event: CapacityEvent,
+	ctx: ExtensionContext,
+	settings: Settings,
+): Promise<void> {
+	if (settings.learning?.enabled === false || settings.learning?.actionLog === false) return;
+	const benchmarkRunId = process.env[ENV_BENCHMARK_RUN_ID] || undefined;
+	const harnessProfile = harnessProfileOf(settings);
+	await ProjectActionStore.open(ctx.cwd).append(
+		createSubagentCapacityAction(ctx.cwd, {
+			host: event.key,
+			event: event.type,
+			...(event.limit === undefined ? {} : { limit: event.limit }),
+			running: event.running,
+			...(event.pausedUntil === undefined ? {} : { pausedUntil: event.pausedUntil }),
+			at: event.at,
+			parentSessionId: ctx.sessionManager.getSessionId(),
+			...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
+			harnessProfile,
+			armId: armIdFromSettings(harnessProfile, settings.subagents),
+		}),
+	);
 }

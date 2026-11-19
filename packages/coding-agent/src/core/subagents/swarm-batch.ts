@@ -102,6 +102,14 @@ export interface SwarmBatchOptions {
 	 * batch under a limit that never clears. Defaults to {@link DEFAULT_MAX_RATE_LIMIT_RETRIES}.
 	 */
 	readonly maxRateLimitRetries?: number;
+	/**
+	 * Shared capacity gate: returns a release function when the task may launch now, or undefined
+	 * when its host has no free slot. When set, it replaces the batch's own rate-limit capacity
+	 * (launch pacing and retry backoff stay), so what one batch learns applies to the next.
+	 */
+	readonly admit?: (task: SwarmBatchTask<unknown>) => (() => void) | undefined;
+	/** Subscribe to "a slot may be free" notifications from the {@link admit} gate; returns unsubscribe. */
+	readonly subscribeCapacity?: (listener: () => void) => () => void;
 }
 
 const INITIAL_LAUNCH_LIMIT = 5;
@@ -177,6 +185,8 @@ type TaskState<T> = {
 type ActiveAttempt<T> = {
 	readonly state: TaskState<T>;
 	readonly controller: AbortController;
+	/** Frees the shared capacity slot this attempt holds. */
+	readonly release: () => void;
 	cleanup: () => void;
 	ready: boolean;
 	timedOut: boolean;
@@ -199,6 +209,9 @@ export class SwarmBatch<T, R> {
 	private readonly isUserCancellation: (reason: unknown) => boolean;
 	private readonly maxConcurrency: number | undefined;
 	private readonly maxRateLimitRetries: number;
+	private readonly admit: ((task: SwarmBatchTask<unknown>) => (() => void) | undefined) | undefined;
+	private readonly subscribeCapacity: ((listener: () => void) => () => void) | undefined;
+	private unsubscribeCapacity: (() => void) | undefined;
 	private normalLaunchCount = 0;
 	private normalLaunchTimer: ReturnType<typeof setTimeout> | undefined;
 	private rateLimitLaunchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -231,6 +244,8 @@ export class SwarmBatch<T, R> {
 		}
 		this.maxConcurrency = options.maxConcurrency;
 		this.maxRateLimitRetries = options.maxRateLimitRetries ?? DEFAULT_MAX_RATE_LIMIT_RETRIES;
+		this.admit = options.admit;
+		this.subscribeCapacity = options.subscribeCapacity;
 		this.batchSignal = options.signal;
 		this.isRateLimitError = options.isRateLimitError ?? defaultIsRateLimitError;
 		this.isUserCancellation = options.isUserCancellation ?? isUserCancellation;
@@ -274,6 +289,7 @@ export class SwarmBatch<T, R> {
 			}
 
 			this.batchSignal?.addEventListener("abort", this.batchAbortListener, { once: true });
+			this.unsubscribeCapacity = this.subscribeCapacity?.(() => this.schedule());
 			this.schedule();
 		});
 	}
@@ -297,7 +313,8 @@ export class SwarmBatch<T, R> {
 			!this.rateLimitMode &&
 			!this.isAtConcurrencyLimit()
 		) {
-			this.startAttempt(this.pending.shift()!);
+			// No admissible task: a capacity notification reschedules.
+			if (!this.launchNextAdmissible(() => true)) return;
 			this.normalLaunchCount += 1;
 		}
 
@@ -314,7 +331,7 @@ export class SwarmBatch<T, R> {
 			this.normalLaunchTimer = undefined;
 			if (this.finished || this.rateLimitMode || this.pending.length === 0) return;
 			if (this.isAtConcurrencyLimit()) return;
-			this.startAttempt(this.pending.shift()!);
+			if (!this.launchNextAdmissible(() => true)) return;
 			this.normalLaunchCount += 1;
 			this.schedule();
 		}, INITIAL_LAUNCH_INTERVAL_MS);
@@ -330,7 +347,7 @@ export class SwarmBatch<T, R> {
 
 		const now = Date.now();
 		this.recoverRateLimitCapacity(now);
-		if (this.isAtConcurrencyLimit() || this.active.size >= this.rateLimitCapacity) {
+		if (this.isAtConcurrencyLimit() || this.isAtRateLimitCapacity()) {
 			this.scheduleRateLimitWakeup(this.nextRateLimitCapacityRecoveryAt(), now);
 			return;
 		}
@@ -342,21 +359,39 @@ export class SwarmBatch<T, R> {
 			return;
 		}
 
-		const pendingIndex = this.pending.findIndex((state) => state.retryReadyAt <= now);
-		if (pendingIndex === -1) return;
-
-		const [state] = this.pending.splice(pendingIndex, 1);
-		this.startAttempt(state!);
+		if (!this.launchNextAdmissible((state) => state.retryReadyAt <= now)) return;
 		this.nextRateLimitLaunchAt = now + this.globalRetryIntervalMs;
 		this.scheduleNextRateLimitWakeup(now);
 	}
 
-	private startAttempt(state: TaskState<T>): void {
-		if (this.finished || this.controller.signal.aborted) return;
+	/** The per-batch rate-limit capacity, unless a shared {@link SwarmBatchOptions.admit} gate replaces it. */
+	private isAtRateLimitCapacity(): boolean {
+		return this.admit === undefined && this.active.size >= this.rateLimitCapacity;
+	}
+
+	/** Launch the first pending task that is ready and admitted by the shared gate; false when none is. */
+	private launchNextAdmissible(ready: (state: TaskState<T>) => boolean): boolean {
+		for (const [index, state] of this.pending.entries()) {
+			if (!ready(state)) continue;
+			const release = this.admit === undefined ? () => {} : this.admit(state.task);
+			if (release === undefined) continue;
+			this.pending.splice(index, 1);
+			this.startAttempt(state, release);
+			return true;
+		}
+		return false;
+	}
+
+	private startAttempt(state: TaskState<T>, release: () => void): void {
+		if (this.finished || this.controller.signal.aborted) {
+			release();
+			return;
+		}
 
 		const attempt: ActiveAttempt<T> = {
 			state,
 			controller: new AbortController(),
+			release,
 			cleanup: () => {},
 			ready: false,
 			timedOut: false,
@@ -364,11 +399,14 @@ export class SwarmBatch<T, R> {
 		attempt.cleanup = this.linkAttemptSignals(attempt, state.task);
 		this.active.add(attempt);
 
+		// The shared slot is freed when the attempt's run actually ends, even after the batch finished.
 		this.runAttempt(attempt).then(
 			(outcome) => {
+				attempt.release();
 				this.handleAttemptOutcome(attempt, outcome);
 			},
 			(error) => {
+				attempt.release();
 				this.handleAttemptError(attempt, error);
 			},
 		);
@@ -572,7 +610,7 @@ export class SwarmBatch<T, R> {
 		if (this.pending.length === 0) return;
 
 		const nextWakeupAt =
-			this.isAtConcurrencyLimit() || this.active.size >= this.rateLimitCapacity
+			this.isAtConcurrencyLimit() || this.isAtRateLimitCapacity()
 				? this.nextRateLimitCapacityRecoveryAt()
 				: Math.min(
 						Math.max(this.nextRateLimitLaunchAt, this.nextPendingReadyAt()),
@@ -655,6 +693,7 @@ export class SwarmBatch<T, R> {
 
 	private cleanup(): void {
 		this.batchSignal?.removeEventListener("abort", this.batchAbortListener);
+		this.unsubscribeCapacity?.();
 		this.clearNormalTimer();
 		this.clearRateLimitTimer();
 		for (const attempt of this.active.values()) {

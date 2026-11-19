@@ -104,6 +104,8 @@ function createMockSwarmRunner(options: MockSwarmRunnerOptions = {}) {
 				readonly isRateLimitError?: (error: unknown) => boolean;
 				readonly isUserCancellation?: (reason: unknown) => boolean;
 				readonly maxRateLimitRetries?: number;
+				readonly admit?: (task: SwarmBatchTask<unknown>) => (() => void) | undefined;
+				readonly subscribeCapacity?: (listener: () => void) => () => void;
 			} = {},
 		): Promise<Array<SwarmBatchRunResult<number, string>>> {
 			return new SwarmBatch<number, string>(launcher, tasks, {
@@ -1088,5 +1090,46 @@ describe("SwarmBatch suspended and abandoned callbacks", () => {
 
 		controller.abort();
 		await expect(running).rejects.toThrow();
+	});
+});
+
+describe("SwarmBatch shared capacity gate", () => {
+	it("launches only admitted tasks and resumes when the gate frees a slot", async () => {
+		vi.useFakeTimers();
+		let free = 1;
+		const listeners = new Set<() => void>();
+		const admit = () => {
+			if (free === 0) return undefined;
+			free -= 1;
+			return () => {
+				free += 1;
+				for (const listener of [...listeners]) listener();
+			};
+		};
+		const { runBatch, attempts } = createMockSwarmRunner();
+		const running = runBatch(
+			Array.from({ length: 3 }, (_, index) => queuedTask(index + 1)),
+			{
+				admit,
+				subscribeCapacity: (listener) => {
+					listeners.add(listener);
+					return () => listeners.delete(listener);
+				},
+			},
+		);
+
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(attempts).toHaveLength(1);
+		attempts[0]!.outcome.resolve({ status: "completed", result: "one" });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(attempts).toHaveLength(2);
+		attempts[1]!.outcome.resolve({ status: "completed", result: "two" });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(attempts).toHaveLength(3);
+		attempts[2]!.outcome.resolve({ status: "completed", result: "three" });
+
+		await expect(running).resolves.toHaveLength(3);
+		expect(free).toBe(1);
+		expect(listeners.size).toBe(0);
 	});
 });

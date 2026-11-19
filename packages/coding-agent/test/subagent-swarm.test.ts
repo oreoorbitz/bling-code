@@ -7,6 +7,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/index.ts";
 import type { Settings } from "../src/core/settings-manager.ts";
+import type { CapacityEvent } from "../src/core/subagents/capacity.ts";
 import { SWARM_MAX_CONCURRENCY_ENV } from "../src/core/subagents/swarm-batch.ts";
 import type { SubagentRunSummary } from "../src/core/subagents/types.ts";
 import {
@@ -45,6 +46,7 @@ afterEach(() => {
 });
 
 interface SetupOptions {
+	onCapacityEvent?: (event: CapacityEvent) => void;
 	subagents?: Settings["subagents"];
 	fauxOptions?: Parameters<typeof registerFaux>[0];
 	onRunComplete?: SubagentRunCompleteHook;
@@ -75,7 +77,11 @@ function setup(options: SetupOptions = {}) {
 		getSettings: () => settings,
 		registerTool: (definition: ToolDefinition) => tools.set(definition.name, definition),
 	} as unknown as ExtensionAPI;
-	createSubagentsExtension({ onRunComplete: options.onRunComplete, onVerdict: options.onVerdict })(api);
+	createSubagentsExtension({
+		onRunComplete: options.onRunComplete,
+		onVerdict: options.onVerdict,
+		onCapacityEvent: options.onCapacityEvent,
+	})(api);
 	handlers.get("session_start")?.();
 	const streamer = fauxStreamer();
 	/** The active session branch as the verdict tool sees it. Tests append the tool results of earlier calls. */
@@ -725,5 +731,43 @@ describe("sibling coders", () => {
 		const parsed = JSON.parse(text) as { results: unknown[]; omittedTasks?: number };
 		expect(parsed.results).toHaveLength(MAX_SWARM_TASKS);
 		expect(parsed.omittedTasks).toBeUndefined();
+	});
+});
+
+describe("shared host capacity", () => {
+	it("learns a host limit from a rate limit, records it, and reports it to Ling in later calls", async () => {
+		const events: CapacityEvent[] = [];
+		const { faux, run } = setup({ subagents: SCOUT_ONLY, onCapacityEvent: (event) => events.push(event) });
+		let throttled = false;
+		faux.setResponses(
+			Array.from({ length: 6 }, () => (context: TranscriptContext) => {
+				if (userPrompt(context).includes("aaaa") && !throttled) {
+					throttled = true;
+					return fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 Too Many Requests" });
+				}
+				return toolCall("report", EMPTY_REPORT);
+			}),
+		);
+		const first = await run(
+			SUBAGENT_SWARM_TOOL_NAME,
+			swarmParams([scoutTask("aaaa"), scoutTask("bbbb"), scoutTask("cccc")]),
+		);
+		expect(swarmDetails(first).results.map((summary) => summary.outcome)).toEqual([
+			"completed",
+			"completed",
+			"completed",
+		]);
+		const host = "openrouter/faux-1@chutes/fp8";
+		const firstView = (first.details as { concurrency: Array<{ host: string; limit?: number }> }).concurrency;
+		expect(firstView).toEqual([expect.objectContaining({ host, running: 0 })]);
+		expect(firstView[0]?.limit).toBeGreaterThanOrEqual(1);
+		expect(JSON.parse((first.content[0] as { text: string }).text).concurrency).toEqual(firstView);
+		expect(events.map((event) => event.type)).toContain("rate_limited");
+		expect(events.every((event) => event.key === host)).toBe(true);
+
+		// The next call starts from the learned limit instead of learning it again.
+		const second = await run(SUBAGENT_SWARM_TOOL_NAME, swarmParams([scoutTask("dddd"), scoutTask("eeee")]));
+		const secondView = (second.details as { concurrency: Array<{ limit?: number }> }).concurrency;
+		expect(secondView[0]?.limit).toBe(firstView[0]?.limit);
 	});
 });

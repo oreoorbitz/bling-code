@@ -6,6 +6,12 @@ import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "../../cor
 import { upstreamMatches } from "../../core/learning/benchmark-report.ts";
 import type { Settings } from "../../core/settings-manager.ts";
 import {
+	type CapacityEvent,
+	type CapacitySnapshot,
+	capacityKey,
+	SubagentCapacity,
+} from "../../core/subagents/capacity.ts";
+import {
 	createProjectScope,
 	createWriteScope,
 	type ProjectScope,
@@ -50,7 +56,7 @@ import type {
 	SubagentRunSummary,
 	SubagentUsage,
 } from "../../core/subagents/types.ts";
-import { recordSubagentRun, recordSubagentVerdict, type SubagentVerdictInput } from "./ledger.ts";
+import { recordCapacityEvent, recordSubagentRun, recordSubagentVerdict, type SubagentVerdictInput } from "./ledger.ts";
 
 export const SCOUT_TOOL_NAME = "scout";
 export const CODE_FILE_TOOL_NAME = "code_file";
@@ -73,6 +79,8 @@ export const MAX_SWARM_TASKS = 128;
 export const MAX_SWARM_DESCRIPTION_CHARS = 500;
 /** Overall bound for the text the subagent_swarm tool returns, across every task result. */
 export const MAX_SWARM_RESULT_CHARS = 48_000;
+/** How long a single scout or code_file call waits for a slot on its host before it is refused. */
+export const SINGLE_CALL_SLOT_WAIT_MS = 30_000;
 /** Grace added to a role's timeoutMs when handing a task to the batch scheduler, so the runner's own timeout (a "timeout" outcome) wins over the scheduler's abort (an "aborted" outcome). */
 const SWARM_TASK_TIMEOUT_GRACE_MS = 30_000;
 /** How long to wait for aborted in-flight attempts to settle so their usage is recorded. */
@@ -97,6 +105,10 @@ export interface SubagentsExtensionOptions {
 	onVerdict?: SubagentVerdictHook;
 	/** Called after every run, with the full summary. A failure never fails the tool call; it is attached to details as ledgerWarning. */
 	onRunComplete?: SubagentRunCompleteHook;
+	/** Called for every change of a host's learned concurrency. A failure is ignored. */
+	onCapacityEvent?: (event: CapacityEvent, ctx: ExtensionContext, settings: Settings) => void | Promise<void>;
+	/** Clock for the capacity governor; tests inject one. */
+	now?: () => number;
 }
 
 const scoutQuestionSchema = Type.String({ description: "What to find out. One focused question." });
@@ -219,6 +231,7 @@ const VERDICT_DESCRIPTION = `Record whether you accept or reject the result of a
 const SWARM_DESCRIPTION = `Launch ${MIN_SWARM_TASKS} to ${MAX_SWARM_TASKS} subagents as one batch, each a scout or code_file brief, and get every result back in task order.
 - A task is exactly the parameters of one scout or code_file call plus kind: "scout" or "coder". Roles, models, hosts, and budgets are fixed by configuration, exactly as for the single tools.
 - Every brief is checked before anything starts. An invalid brief fails the whole call and starts nothing. Two coder tasks must not target the same file.
+- Concurrency is learned per host for the whole session: after a host rate limits, at most the learned number of subagents run on it at once (shared with single scout and code_file calls), and launches on it pause briefly. The result's concurrency field shows each host's learned limit, running count, and remaining pause; size the next batch to it.
 - Tasks start in bounded waves and run concurrently. A provider rate limit before a task's first response requeues only that task, at most ${DEFAULT_MAX_RATE_LIMIT_RETRIES} times; a daily or account quota is not retried. Anything the subagent already received (including a coder that started writing its file) is never re-run. There is no resume: to retry failed work, call subagent_swarm again with fresh briefs.
 - Coders edit at the same time, so a coder's own run_oracle may see other targets half-written. The authoritative oracle of each coder task runs after every task has stopped, one at a time, against the final files; its result decides the outcome.
 - Each result is the same summary a single scout or code_file call returns, with its runId; record your decision with subagent_verdict. Every task is also written to the ledger like a single run, with usage aggregated across its attempts. In a large batch the text keeps the most useful parts of each result and says what it omitted.
@@ -412,14 +425,18 @@ function reduceSummaryToChars(summary: SubagentRunSummary, limit: number): Subag
  * {@link MAX_SWARM_RESULT_CHARS} no matter how many tasks returned large reports, and is always valid
  * JSON: when even minimal summaries do not fit, trailing tasks are counted in `omittedTasks`.
  */
-export function renderSwarmText(description: string, summaries: readonly SubagentRunSummary[]): string {
+export function renderSwarmText(
+	description: string,
+	summaries: readonly SubagentRunSummary[],
+	concurrency: readonly SwarmConcurrencyView[] = [],
+): string {
 	const counts = { total: summaries.length, completed: 0, failed: 0, aborted: 0 };
 	for (const summary of summaries) {
 		if (summary.outcome === "aborted") counts.aborted += 1;
 		else if (SUCCESS_OUTCOMES.has(summary.outcome)) counts.completed += 1;
 		else counts.failed += 1;
 	}
-	const header = { description, ...counts };
+	const header = { description, ...counts, ...(concurrency.length > 0 ? { concurrency } : {}) };
 	const overhead = JSON.stringify(header).length + summaries.length + 64;
 	const available = Math.max(0, MAX_SWARM_RESULT_CHARS - overhead);
 	const perTask = Math.floor(available / Math.max(1, summaries.length));
@@ -436,6 +453,30 @@ export function renderSwarmText(description: string, summaries: readonly Subagen
 		results.pop();
 		omittedTasks += 1;
 	}
+}
+
+/** One host's capacity as Ling sees it in a swarm result, to size the next batch. */
+export interface SwarmConcurrencyView {
+	host: string;
+	/** Learned limit of concurrent subagents; absent until the host rate limits. */
+	limit?: number;
+	running: number;
+	/** Seconds until launches on the host resume after a rate limit. */
+	pausedForSeconds?: number;
+}
+
+function concurrencyView(snapshot: CapacitySnapshot, now: number): SwarmConcurrencyView {
+	const pausedFor = snapshot.pausedUntil === undefined ? 0 : Math.ceil((snapshot.pausedUntil - now) / 1000);
+	return {
+		host: snapshot.key,
+		...(snapshot.limit === undefined ? {} : { limit: snapshot.limit }),
+		running: snapshot.running,
+		...(pausedFor > 0 ? { pausedForSeconds: pausedFor } : {}),
+	};
+}
+
+function roleCapacityKey(role: ResolvedRole): string {
+	return capacityKey(role.config.provider, role.config.model, role.requestedUpstream);
 }
 
 function zeroUsage(): SubagentUsage {
@@ -650,6 +691,55 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 		const releasedTargets = new Set<string>();
 		/** Files whose first direct edit or write was already blocked once under "prefer" delegation. */
 		const remindedTargets = new Set<string>();
+		/** Context of the latest subagent tool call: capacity changes from timers are recorded against it. */
+		let latestCtx: ExtensionContext | undefined;
+		const now = extensionOptions.now ?? Date.now;
+		const capacity = new SubagentCapacity({
+			now,
+			onEvent: (event) => {
+				const ctx = latestCtx;
+				if (ctx === undefined || extensionOptions.onCapacityEvent === undefined) return;
+				void Promise.resolve()
+					.then(() => extensionOptions.onCapacityEvent?.(event, ctx, pi.getSettings()))
+					.catch(() => {});
+			},
+		});
+		/**
+		 * runSubagent plus capacity reporting: the first response lifts a pause on the host, and the
+		 * run's end reports a rate limit (with the slot still held) or a success.
+		 */
+		const runReported = async (options: Parameters<typeof runSubagent>[0]): Promise<SubagentRunResult> => {
+			const key = roleCapacityKey(options.role);
+			const run = await runSubagent({
+				...options,
+				onReady: () => {
+					capacity.reportSuccess(key);
+					options.onReady?.();
+				},
+			});
+			if (run.rateLimit !== undefined) capacity.reportRateLimited(key);
+			else if (run.turns > 0) capacity.reportSuccess(key);
+			return run;
+		};
+		/** Hold a slot on the role's host for a single scout or code_file call, or say why there is none. */
+		const withSlot = async <R>(
+			role: ResolvedRole,
+			signal: AbortSignal | undefined,
+			body: () => Promise<R>,
+		): Promise<R | ReturnType<typeof errorResult>> => {
+			let slot: Awaited<ReturnType<SubagentCapacity["acquire"]>>;
+			try {
+				slot = await capacity.acquire(roleCapacityKey(role), SINGLE_CALL_SLOT_WAIT_MS, signal);
+			} catch {
+				return errorResult("Interrupted while waiting for a subagent slot; nothing ran.");
+			}
+			if (typeof slot !== "function") return errorResult(`No subagent slot: ${slot.refused}`);
+			try {
+				return await body();
+			} finally {
+				slot();
+			}
+		};
 		/** Runs the accounting hook; returns a warning instead of throwing so a ledger failure cannot fail the call. */
 		const complete = async (
 			summary: SubagentRunSummary,
@@ -694,7 +784,7 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 				.filter((part) => part !== undefined)
 				.join("\n\n");
 			const gitBefore = await snapshotGitStatus(project.root, signal);
-			const run = await runSubagent({
+			const run = await runReported({
 				role,
 				registry: ctx.modelRegistry,
 				systemPrompt: SCOUT_SYSTEM_PROMPT,
@@ -769,7 +859,7 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 				.join("\n\n");
 			const before: FileSnapshot = await snapshotFile(scope.targetPath);
 			const gitBefore = await snapshotGitStatus(project.root, signal);
-			const run = await runSubagent({
+			const run = await runReported({
 				role,
 				registry: ctx.modelRegistry,
 				systemPrompt: CODER_SYSTEM_PROMPT,
@@ -860,8 +950,11 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 			if (typeof project === "string") return errorResult(project);
 			const pathProblem = startPathsProblem(project, params);
 			if (pathProblem) return errorResult(`Invalid brief: ${pathProblem}`);
-			const { summary } = await buildScoutSummary(resolved, project, params, signal, ctx, randomUUID());
-			return finalResult(summary, await complete(summary, ctx, toolCallId));
+			latestCtx = ctx;
+			return withSlot(resolved, signal, async () => {
+				const { summary } = await buildScoutSummary(resolved, project, params, signal, ctx, randomUUID());
+				return finalResult(summary, await complete(summary, ctx, toolCallId));
+			});
 		};
 
 		const runCoder = async (
@@ -878,10 +971,13 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 			if (typeof project === "string") return errorResult(project);
 			const scope = writeScopeOrProblem(project, params.path);
 			if (typeof scope === "string") return errorResult(`Invalid brief: ${scope}`);
-			const { summary } = await buildCoderSummary(resolved, project, scope, params, signal, ctx, randomUUID());
-			// A failed run leaves the file as written; release the target under required delegation.
-			if (summary.outcome !== "passed") releasedTargets.add(canonicalPath(scope.targetPath));
-			return finalResult(summary, await complete(summary, ctx, toolCallId));
+			latestCtx = ctx;
+			return withSlot(resolved, signal, async () => {
+				const { summary } = await buildCoderSummary(resolved, project, scope, params, signal, ctx, randomUUID());
+				// A failed run leaves the file as written; release the target under required delegation.
+				if (summary.outcome !== "passed") releasedTargets.add(canonicalPath(scope.targetPath));
+				return finalResult(summary, await complete(summary, ctx, toolCallId));
+			});
 		};
 
 		interface SwarmTaskData {
@@ -988,6 +1084,7 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 				return errorResult(error instanceof Error ? error.message : String(error));
 			}
 			const { tasks, project } = preflight;
+			latestCtx = ctx;
 
 			// The batch resolves with per-task aborted results on any caller abort, so an interrupt
 			// (whatever reason the agent loop attaches) yields per-task results instead of a rejection.
@@ -1109,6 +1206,10 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 					signal: batchController.signal,
 					maxConcurrency,
 					isRateLimitError: (error) => error instanceof SwarmAttemptRateLimitError,
+					// Session-wide per-host capacity replaces the batch's own: what this batch learns
+					// about a host applies to later calls, and single calls share the same slots.
+					admit: (task) => capacity.tryAcquire(roleCapacityKey((task.data as SwarmTaskData).role)),
+					subscribeCapacity: (listener) => capacity.subscribe(listener),
 				}).run();
 			} catch (error) {
 				// Not reachable for caller aborts (mapped to user cancellation above); keep a
@@ -1197,13 +1298,16 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 				const warning = await complete(summary, ctx, toolCallId);
 				if (warning !== undefined && ledgerWarning === undefined) ledgerWarning = warning;
 			}
+			const hosts = [...new Set(tasks.map((task) => roleCapacityKey(task.role)))];
+			const concurrency = hosts.map((host) => concurrencyView(capacity.snapshot(host), now()));
 			const details = {
 				description: params.description,
 				results: summaries,
+				concurrency,
 				...(ledgerWarning === undefined ? {} : { ledgerWarning }),
 			};
 			return {
-				content: [{ type: "text" as const, text: renderSwarmText(params.description, summaries) }],
+				content: [{ type: "text" as const, text: renderSwarmText(params.description, summaries, concurrency) }],
 				details,
 				...(summaries.some((summary) => ERROR_OUTCOMES.has(summary.outcome)) ? { isError: true } : {}),
 			};
@@ -1265,6 +1369,9 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 			};
 		});
 
+		// Learned host limits outlive a session switch in this process; only the timers stop here.
+		pi.on("session_shutdown", () => capacity.dispose());
+
 		pi.on("session_start", () => {
 			releasedTargets.clear();
 			remindedTargets.clear();
@@ -1319,4 +1426,8 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 	};
 }
 
-export default createSubagentsExtension({ onRunComplete: recordSubagentRun, onVerdict: recordSubagentVerdict });
+export default createSubagentsExtension({
+	onRunComplete: recordSubagentRun,
+	onVerdict: recordSubagentVerdict,
+	onCapacityEvent: recordCapacityEvent,
+});

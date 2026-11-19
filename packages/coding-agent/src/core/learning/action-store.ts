@@ -388,12 +388,56 @@ export function createSubagentVerdictAction(
 	};
 }
 
+export interface LearningSubagentCapacityActionInput {
+	/** Host the change applies to: `<provider>/<model>@<upstream>`. */
+	host: string;
+	event: "rate_limited" | "limit_shrunk" | "limit_recovered" | "pause_lifted";
+	/** Learned concurrency limit after the change; absent while the host has none. */
+	limit?: number;
+	/** Subagent runs in flight on the host at the change. */
+	running: number;
+	/** Launches on the host wait until this time (epoch ms), unless a success lifts the pause first. */
+	pausedUntil?: number;
+	at: number;
+	parentSessionId: string;
+	benchmarkRunId?: string;
+	harnessProfile?: HarnessProfile;
+	armId?: string;
+}
+
+/** One change of a host's learned subagent concurrency (see `src/core/subagents/capacity.ts`). */
+export interface LearningSubagentCapacityAction extends LearningSubagentCapacityActionInput {
+	version: 1;
+	actionId: string;
+	projectId: string;
+	sessionId: string;
+	kind: "subagent_capacity";
+	timestamp: number;
+}
+
+export function createSubagentCapacityAction(
+	cwd: string,
+	input: LearningSubagentCapacityActionInput,
+): LearningSubagentCapacityAction {
+	const sanitized = redactSensitive(input) as LearningSubagentCapacityActionInput;
+	return {
+		...sanitized,
+		version: 1,
+		actionId: deterministicId("capacity", sanitized),
+		projectId: getProjectId(cwd),
+		sessionId: sanitized.parentSessionId,
+		kind: "subagent_capacity",
+		timestamp: input.at,
+	};
+}
+
 export type LearningActionRecord =
 	| LearningMessageAction
 	| LearningToolAction
 	| LearningBenchmarkAction
 	| LearningSubagentAction
-	| LearningSubagentVerdictAction;
+	| LearningSubagentVerdictAction
+	| LearningSubagentCapacityAction;
 
 /** Build a deterministic, redacted ledger record for one executed project benchmark. */
 export function createBenchmarkAction(cwd: string, input: LearningBenchmarkActionInput): LearningBenchmarkAction {
