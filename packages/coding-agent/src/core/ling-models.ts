@@ -5,9 +5,10 @@ export const LING_OPENROUTER_PROVIDER_ID = "openrouter";
 const LING_OPENROUTER_MODEL_PREFIX = "inclusionai/ling-";
 
 /**
- * Vendor-recommended sampling from each model's generation_config.json, and the OpenRouter upstream
- * pinned by default so one run is never split across hosts with different quantization. Novita serves
- * Ling 3.1/3.0 with the full 262k context; DeepInfra is the only host for 3.0 VL.
+ * Vendor-recommended sampling from each model's release notes, and the OpenRouter upstream
+ * pinned by default so one run is never split across hosts with different quantization. Novita is
+ * the only host for Ling 3.1 (1M context) and serves 3.0 with the full 262k context; Ant Digital is
+ * the only host for the 3.2 Flash free trial; DeepInfra is the only host for 3.0 VL.
  */
 export const LING_PROFILES = {
 	"3.1": {
@@ -16,6 +17,15 @@ export const LING_PROFILES = {
 		openRouterUpstream: "novita",
 		endpointModelId: "Ling-3.1-flash",
 		input: ["text"],
+		samplingParams: { temperature: 1.0, top_p: 0.95, top_k: 20 },
+	},
+	"3.2": {
+		name: "Ling 3.2 Flash",
+		openRouterModelId: "inclusionai/ling-3.2-flash:free",
+		openRouterUpstream: "antdigital",
+		endpointModelId: "Ling-3.2-flash",
+		input: ["text", "image"],
+		// Provisional: no vendor sampling published during the free trial, so mirror 3.1.
 		samplingParams: { temperature: 1.0, top_p: 0.95, top_k: 20 },
 	},
 	"3.0": {

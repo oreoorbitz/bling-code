@@ -14,6 +14,7 @@ import {
 	MAX_RESULT_CHARS,
 	renderSummaryText,
 	SCOUT_TOOL_NAME,
+	SUBAGENT_SWARM_TOOL_NAME,
 	SUBAGENT_VERDICT_TOOL_NAME,
 	type SubagentRunCompleteHook,
 	type SubagentVerdictHook,
@@ -123,11 +124,18 @@ describe("registration", () => {
 		expect([...setup({ subagents: undefined }).tools.keys()]).toEqual([]);
 		expect([...setup({ subagents: SCOUT_ONLY }).tools.keys()].sort()).toEqual([
 			SCOUT_TOOL_NAME,
+			SUBAGENT_SWARM_TOOL_NAME,
 			SUBAGENT_VERDICT_TOOL_NAME,
 		]);
 		const both = setup({ subagents: BOTH });
-		expect([...both.tools.keys()].sort()).toEqual([CODE_FILE_TOOL_NAME, SCOUT_TOOL_NAME, SUBAGENT_VERDICT_TOOL_NAME]);
+		expect([...both.tools.keys()].sort()).toEqual([
+			CODE_FILE_TOOL_NAME,
+			SCOUT_TOOL_NAME,
+			SUBAGENT_SWARM_TOOL_NAME,
+			SUBAGENT_VERDICT_TOOL_NAME,
+		]);
 		expect(both.tools.get(CODE_FILE_TOOL_NAME)?.executionMode).toBe("sequential");
+		expect(both.tools.get(SUBAGENT_SWARM_TOOL_NAME)?.executionMode).toBe("sequential");
 		expect(both.tools.get(SCOUT_TOOL_NAME)?.promptSnippet).toContain("scout model");
 		expect(both.tools.get(CODE_FILE_TOOL_NAME)?.promptSnippet).toContain("coder model");
 	});

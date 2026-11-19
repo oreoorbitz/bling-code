@@ -1369,6 +1369,14 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getFetchLinkedImages(): boolean {
+		return this.settings.images?.fetchLinkedImages ?? SETTINGS_DEFAULTS.images.fetchLinkedImages;
+	}
+
+	getAutoVisionSwitch(): boolean {
+		return this.settings.images?.autoVisionSwitch ?? SETTINGS_DEFAULTS.images.autoVisionSwitch;
+	}
+
 	getEnabledModels(): string[] | undefined {
 		return this.settings.enabledModels;
 	}

@@ -65,9 +65,10 @@ describe("validateRoleConfig", () => {
 	test("rejects upstream for other providers", () => {
 		expect(validateRoleConfig("a", role({ provider: "ling" })).join()).toContain("only supported");
 	});
-	test("inception rejects top_p and top_k", () => {
-		const errors = validateRoleConfig("a", role({ upstream: "inception", sampling: { top_p: 0.9, top_k: 5 } }));
-		expect(errors).toHaveLength(2);
+	test("groq rejects top_k but accepts top_p", () => {
+		const errors = validateRoleConfig("a", role({ upstream: "groq", sampling: { top_p: 0.9, top_k: 5 } }));
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toContain("top_k");
 	});
 	test("cerebras rejects top_k but accepts top_p", () => {
 		expect(validateRoleConfig("a", role({ upstream: "cerebras", sampling: { top_k: 5 } }))).toHaveLength(1);
@@ -102,8 +103,8 @@ describe("validateRoleConfig budgets and sampling table", () => {
 	test("rejects sampling parameters the pinned host does not list", () => {
 		const check = (upstream: string, sampling: object) =>
 			validateRoleConfig("a", role({ upstream, sampling })).length === 0;
-		expect(check("inception", { temperature: 0.2 })).toBe(true);
-		expect(check("inception", { temperature: 0.2, seed: 1 })).toBe(false);
+		expect(check("groq", { temperature: 0.2, top_p: 0.9, seed: 1 })).toBe(true);
+		expect(check("groq", { temperature: 0.2, top_k: 20 })).toBe(false);
 		expect(check("baidu/fp8", { temperature: 0.2, top_p: 0.9 })).toBe(true);
 		expect(check("baidu/fp8", { top_k: 20 })).toBe(false);
 		expect(check("anthropic", {})).toBe(true);
@@ -252,7 +253,7 @@ describe("example config", () => {
 			armLabel: "qwen-fp8",
 			active: { scout: "qwen-fp8-scout", coder: "qwen-fp8-coder" },
 			roles: Object.fromEntries([
-				mk("mercury-3-scout", "scout", "inception/mercury-3", "inception", { temperature: 0.2 }),
+				mk("gptoss-groq-scout", "scout", "openai/gpt-oss-20b", "groq", { temperature: 0.2, top_p: 0.9 }),
 				mk("qwen-fp8-scout", "scout", "qwen/qwen3.8-27b", "chutes/fp8", {
 					temperature: 0.2,
 					top_p: 0.9,
@@ -292,7 +293,7 @@ describe("documented round-1 arms in LING.md", () => {
 		expect(pins).toEqual({
 			"ling30-scout": "novita",
 			"gptoss20-scout": "coreweave/fp4",
-			"mercury25-scout": "inception",
+			"gptoss-groq-scout": "groq",
 			"qwen-fp8-scout": "chutes/fp8",
 			"ling-coder-oneshot": "novita",
 			"ling-coder-repair2": "novita",

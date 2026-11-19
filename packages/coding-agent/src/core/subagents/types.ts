@@ -98,6 +98,18 @@ export interface CoderReport {
 	outsideTargetChanges?: string[];
 }
 
+/** Present on summaries produced by the `subagent_swarm` tool: task position and per-task attempt accounting. */
+export interface SubagentSwarmInfo {
+	/** 1-based position of this task in the subagent_swarm call's tasks array. */
+	index: number;
+	/** Total number of tasks in the call. */
+	total: number;
+	/** Attempts this task ran, including startup rate-limit retries. */
+	attempts: number;
+	/** How many of those attempts were startup rate-limit retries. */
+	rateLimitRetries: number;
+}
+
 export interface SubagentRunSummary {
 	runId: string;
 	kind: RoleKind;
@@ -124,6 +136,8 @@ export interface SubagentRunSummary {
 	rawText?: string;
 	scout?: ScoutReport & { treeChanged?: boolean };
 	coder?: CoderReport;
+	/** Set on results of the subagent_swarm tool; absent on scout/code_file runs. */
+	swarm?: SubagentSwarmInfo;
 	/** Set on the tool result details only, when the ledger write failed. Not part of the stored record. */
 	ledgerWarning?: string;
 }

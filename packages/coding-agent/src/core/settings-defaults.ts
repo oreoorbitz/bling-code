@@ -41,6 +41,8 @@ export const SETTINGS_DEFAULTS = {
 	images: {
 		autoResize: true,
 		blockImages: false,
+		fetchLinkedImages: true,
+		autoVisionSwitch: true,
 	},
 	doubleEscapeAction: "tree",
 	treeFilterMode: "default",

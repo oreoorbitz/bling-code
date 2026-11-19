@@ -464,6 +464,16 @@
           "type": "boolean",
           "description": "When true, prevents all images from being sent to LLM providers.",
           "default": false
+        },
+        "fetchLinkedImages": {
+          "type": "boolean",
+          "description": "Download image URLs in prompts as attachments, within time and size bounds.",
+          "default": true
+        },
+        "autoVisionSwitch": {
+          "type": "boolean",
+          "description": "Serve a prompt that carries images with Ling 3.2 when the session runs an OpenRouter Ling model without image input.",
+          "default": true
         }
       }
     },

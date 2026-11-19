@@ -57,13 +57,13 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} configure --base-url <url> [options]
 
 ${chalk.bold("Options:")}
-  --profile <version>       Model profile: 3.1 (default), 3.0, or 3.0-vl
-  --upstream <slug>         OpenRouter provider to pin, without fallbacks (default: novita; deepinfra for 3.0-vl)
+  --profile <version>       Model profile: 3.1 (default), 3.2, 3.0, or 3.0-vl
+  --upstream <slug>         OpenRouter provider to pin, without fallbacks (default: novita; antdigital for 3.2, deepinfra for 3.0-vl)
   --help, -h                Show this help
 
 ${chalk.bold("Self-hosted endpoint options:")}
   --base-url <url>          Endpoint base URL, for example http://localhost:30000/v1
-  --model-id <id>           Served model ID (default: Ling-3.1-flash, Ling-3.0-flash, or Ling-3.0-flash-vl)
+  --model-id <id>           Served model ID (default: Ling-3.1-flash, Ling-3.2-flash, Ling-3.0-flash, or Ling-3.0-flash-vl)
   --api-key-env <name>      Environment variable holding the API key (default: LING_API_KEY)
   --dialect <name>          Reasoning request format: chat-template (default), ling, or openrouter
   --context-window <tokens> Served context window (default: 262144, not the 1M architectural maximum)
@@ -134,7 +134,7 @@ export function parseLingConfigureArgs(args: string[]): LingConfigureOptions | {
 				baseUrl = value;
 				break;
 			case "--profile":
-				if (!Object.hasOwn(LING_PROFILES, value)) throw new Error("--profile must be 3.1, 3.0, or 3.0-vl");
+				if (!Object.hasOwn(LING_PROFILES, value)) throw new Error("--profile must be 3.1, 3.2, 3.0, or 3.0-vl");
 				profile = value as LingProfile;
 				break;
 			case "--upstream":
@@ -189,14 +189,15 @@ export function parseLingConfigureArgs(args: string[]): LingConfigureOptions | {
 	if (maxTokens > contextWindow) throw new Error("--max-tokens must not exceed --context-window");
 	const selectedModelId = modelId ?? LING_PROFILES[profile].endpointModelId;
 	if (!selectedModelId.trim() || /[\r\n\0]/.test(selectedModelId)) throw new Error("--model-id must be non-empty");
-	const modelGeneration = selectedModelId.match(/ling[-_/]?3\.([01])(?:[-_./]|$)/i)?.[1];
+	const modelGeneration = selectedModelId.match(/ling[-_/]?3\.([012])(?:[-_./]|$)/i)?.[1];
 	if (modelGeneration && !profile.startsWith(`3.${modelGeneration}`)) {
 		throw new Error(
 			`--model-id indicates Ling 3.${modelGeneration} but --profile is ${profile}; select the matching profile`,
 		);
 	}
 	const modelIsVision = /[-_]vl(?:[-_./]|$)/i.test(selectedModelId);
-	if (modelGeneration && modelIsVision !== (profile === "3.0-vl")) {
+	// Only the 3.0 generation splits text and vision with a -vl suffix; 3.2 Flash is multimodal by default.
+	if (modelGeneration && profile !== "3.2" && modelIsVision !== (profile === "3.0-vl")) {
 		throw new Error(
 			`--model-id ${modelIsVision ? "is" : "is not"} a vision model but --profile is ${profile}; select the matching profile`,
 		);

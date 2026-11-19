@@ -2,6 +2,7 @@ import { Agent, type AgentEvent, type AgentTool, type BeforeToolCallContext } fr
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { convertToLlm } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
+import { rateLimitFromAssistantMessage, type SubagentRateLimit } from "./rate-limit.ts";
 import type { ResolvedRole } from "./roles.ts";
 import type { SubagentOutcome, SubagentToolCallRecord, SubagentUsage } from "./types.ts";
 
@@ -40,6 +41,11 @@ export interface RunSubagentOptions {
 	beforeToolCall?: (context: BeforeToolCallContext) => Promise<{ block: true; reason: string } | undefined>;
 	signal?: AbortSignal;
 	onUpdate?: (progress: SubagentProgress) => void;
+	/**
+	 * Called once on the first streamed assistant content. The message may still end in an error;
+	 * this distinguishes a response that started from a failure before any content arrived.
+	 */
+	onReady?: () => void;
 }
 
 export interface SubagentRunResult {
@@ -60,6 +66,11 @@ export interface SubagentRunResult {
 	finalText: string;
 	/** Number of requests that were sent. Always one per turn: the runner never re-prompts or retries. */
 	requests: number;
+	/**
+	 * Set when `outcome` is "error" and the failure is a transient provider rate limit. Quota and
+	 * subscription exhaustion are served as 429 too but are not transient, so they leave this unset.
+	 */
+	rateLimit?: SubagentRateLimit;
 }
 
 function emptyUsage(): SubagentUsage {
@@ -106,24 +117,44 @@ export async function runSubagent(options: RunSubagentOptions): Promise<Subagent
 	let requests = 0;
 	let finalText = "";
 	let lastError: string | undefined;
+	let lastFailedMessage: AssistantMessage | undefined;
 	let lastStopReason: AssistantMessage["stopReason"] | undefined;
 	let abortReason: string | undefined;
 	let timeToFirstToolCallMs: number | undefined;
+	let readySignalled = false;
 
-	const finish = (outcome: RunnerOutcome, error?: string): SubagentRunResult => ({
-		outcome,
-		...(error === undefined ? {} : { error }),
-		usage,
-		turns,
-		startedAt,
-		durationMs: Math.max(0, Math.round(performance.now() - started)),
-		servedUpstreams: [...upstreams],
-		toolCalls,
-		...(timeToFirstToolCallMs === undefined ? {} : { timeToFirstToolCallMs }),
-		failedToolCalls: toolCalls.filter((call) => call.isError).length,
-		finalText,
-		requests,
-	});
+	const signalReady = (): void => {
+		if (readySignalled) return;
+		readySignalled = true;
+		// A throwing onReady must not break the child run (Kimi swallows it the same way).
+		try {
+			options.onReady?.();
+		} catch {
+			// Ignored.
+		}
+	};
+
+	const finish = (outcome: RunnerOutcome, error?: string): SubagentRunResult => {
+		const rateLimit =
+			outcome === "error" && lastFailedMessage !== undefined
+				? rateLimitFromAssistantMessage(lastFailedMessage)
+				: undefined;
+		return {
+			outcome,
+			...(error === undefined ? {} : { error }),
+			usage,
+			turns,
+			startedAt,
+			durationMs: Math.max(0, Math.round(performance.now() - started)),
+			servedUpstreams: [...upstreams],
+			toolCalls,
+			...(timeToFirstToolCallMs === undefined ? {} : { timeToFirstToolCallMs }),
+			failedToolCalls: toolCalls.filter((call) => call.isError).length,
+			finalText,
+			requests,
+			...(rateLimit === undefined ? {} : { rateLimit }),
+		};
+	};
 
 	if (options.signal?.aborted) return finish("aborted", "Aborted before the first request");
 
@@ -184,6 +215,13 @@ export async function runSubagent(options: RunSubagentOptions): Promise<Subagent
 				finalText = assistantText(message);
 				lastStopReason = message.stopReason;
 				lastError = message.stopReason === "error" ? (message.errorMessage ?? "Request failed") : undefined;
+				lastFailedMessage = message.stopReason === "error" ? message : undefined;
+				break;
+			}
+			case "message_update": {
+				if (event.message.role !== "assistant") break;
+				const type = event.assistantMessageEvent.type;
+				if (type === "text_delta" || type === "thinking_delta" || type === "toolcall_delta") signalReady();
 				break;
 			}
 			case "tool_execution_start":

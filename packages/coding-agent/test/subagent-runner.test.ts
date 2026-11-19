@@ -2,6 +2,11 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+	classifySubagentRateLimit,
+	isSubagentRateLimitError,
+	rateLimitFromAssistantMessage,
+} from "../src/core/subagents/rate-limit.ts";
 import type { ResolvedRole } from "../src/core/subagents/roles.ts";
 import { runSubagent } from "../src/core/subagents/runner.ts";
 import { fauxStreamer, makeRole, registerFaux, type UsagePatch, withUsage } from "./subagent-test-utils.ts";
@@ -350,5 +355,188 @@ describe("runSubagent", () => {
 		});
 		expect(result.toolCalls).toEqual([{ tool: "echo", args: '{"text":"hi"}', isError: true }]);
 		expect(result.outcome).toBe("completed");
+	});
+});
+
+describe("runSubagent onReady", () => {
+	it("calls onReady once, when the first response starts producing and before the run completes", async () => {
+		const faux = setup();
+		let readyCount = 0;
+		let readyBeforeSecondRequest = false;
+		faux.setResponses([
+			callEcho(),
+			() => {
+				readyBeforeSecondRequest = readyCount > 0;
+				return fauxAssistantMessage("done");
+			},
+		]);
+		const result = await runSubagent({
+			role: makeRole(faux, "scout"),
+			registry: fauxStreamer(),
+			systemPrompt: "sys",
+			task: "go",
+			tools: [echoTool],
+			onReady: () => {
+				readyCount += 1;
+			},
+		});
+		expect(result.outcome).toBe("completed");
+		expect(result.turns).toBe(2);
+		expect(readyCount).toBe(1);
+		expect(readyBeforeSecondRequest).toBe(true);
+	});
+
+	it("does not call onReady when the first response fails before producing content", async () => {
+		const faux = setup();
+		let readyCount = 0;
+		faux.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 Too Many Requests" })]);
+		const result = await runSubagent({
+			role: makeRole(faux, "scout"),
+			registry: fauxStreamer(),
+			systemPrompt: "sys",
+			task: "go",
+			tools: [],
+			onReady: () => {
+				readyCount += 1;
+			},
+		});
+		expect(result.outcome).toBe("error");
+		expect(readyCount).toBe(0);
+	});
+
+	it("does not call onReady when the parent aborts the run before any content arrives", async () => {
+		const faux = setup({ tokensPerSecond: 5 });
+		faux.setResponses([fauxAssistantMessage([fauxText("word ".repeat(200))])]);
+		let readyCount = 0;
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 100);
+		const result = await runSubagent({
+			role: makeRole(faux, "scout"),
+			registry: fauxStreamer(),
+			systemPrompt: "sys",
+			task: "go",
+			tools: [],
+			signal: controller.signal,
+			onReady: () => {
+				readyCount += 1;
+			},
+		});
+		expect(result.outcome).toBe("aborted");
+		expect(readyCount).toBe(0);
+	});
+});
+
+describe("runSubagent rate-limit detection", () => {
+	async function runWithError(errorMessage: string) {
+		const faux = setup();
+		faux.setResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage })]);
+		return runSubagent({
+			role: makeRole(faux, "scout"),
+			registry: fauxStreamer(),
+			systemPrompt: "sys",
+			task: "go",
+			tools: [],
+		});
+	}
+
+	it("flags a 429 error message as a transient rate limit", async () => {
+		const result = await runWithError("429 Too Many Requests");
+		expect(result.outcome).toBe("error");
+		expect(result.rateLimit).toMatchObject({ message: "429 Too Many Requests" });
+	});
+
+	it("flags message-shaped rate limits that never mention a status", async () => {
+		const result = await runWithError("Over capacity: reached max rpm: 50 (current: 1200)");
+		expect(result.outcome).toBe("error");
+		expect(result.rateLimit?.message).toContain("reached max rpm");
+	});
+
+	it("does not flag quota exhaustion even though gateways serve it as 429", async () => {
+		const result = await runWithError(
+			"429 insufficient_quota: You exceeded your current quota, please check your plan and billing",
+		);
+		expect(result.outcome).toBe("error");
+		expect(result.rateLimit).toBeUndefined();
+	});
+
+	it("does not flag other provider errors", async () => {
+		const result = await runWithError("upstream exploded");
+		expect(result.outcome).toBe("error");
+		expect(result.rateLimit).toBeUndefined();
+	});
+});
+
+describe("subagent rate-limit classification", () => {
+	it("detects a 429 status on structured errors", () => {
+		const error = Object.assign(new Error("Too Many Requests"), { status: 429 });
+		expect(isSubagentRateLimitError(error)).toBe(true);
+		expect(classifySubagentRateLimit(error)).toEqual({ message: "Too Many Requests", statusCode: 429 });
+	});
+
+	it("reads the status from nested response and SDK metadata fields", () => {
+		const openAiLike = Object.assign(new Error("Too Many Requests"), { response: { status: 429 } });
+		expect(isSubagentRateLimitError(openAiLike)).toBe(true);
+		const bedrockLike = Object.assign(new Error("ThrottlingException"), {
+			$metadata: { httpStatusCode: 429 },
+		});
+		expect(isSubagentRateLimitError(bedrockLike)).toBe(true);
+		const mistralLike = Object.assign(new Error("Too Many Requests"), { statusCode: 429 });
+		expect(isSubagentRateLimitError(mistralLike)).toBe(true);
+	});
+
+	it("excludes quota and subscription exhaustion before any status or pattern check", () => {
+		const quota = Object.assign(new Error("429 insufficient_quota: check your plan and billing"), { status: 429 });
+		expect(isSubagentRateLimitError(quota)).toBe(false);
+		expect(isSubagentRateLimitError(new Error("FreeUsageLimitError: Monthly usage limit reached"))).toBe(false);
+		expect(isSubagentRateLimitError(new Error("subscription_sharing_usage_limit_exceeded"))).toBe(false);
+	});
+
+	it("recognizes bare 429 SDK messages and treats OpenRouter's daily free-model cap as quota", () => {
+		expect(isSubagentRateLimitError("429 Provider returned error")).toBe(true);
+		expect(isSubagentRateLimitError("429 status code (no body)")).toBe(true);
+		expect(
+			isSubagentRateLimitError("429 Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000"),
+		).toBe(false);
+	});
+
+	it("lets a defined non-429 status decide over rate-limit wording", () => {
+		const error = Object.assign(new Error("rate limited by gateway"), { status: 503 });
+		expect(isSubagentRateLimitError(error)).toBe(false);
+	});
+
+	it("falls back to message patterns only when no status is observable", () => {
+		expect(isSubagentRateLimitError(new Error("provider.rate_limit: slow down"))).toBe(true);
+		expect(isSubagentRateLimitError(new Error("APIStatusError: 429"))).toBe(true);
+		expect(isSubagentRateLimitError(new Error("stream disconnected before completion"))).toBe(false);
+		expect(isSubagentRateLimitError(new Error("Connection refused"))).toBe(false);
+		expect(isSubagentRateLimitError(new Error("404 model not found"))).toBe(false);
+	});
+
+	it("exposes retry-after metadata when the error carries it", () => {
+		const kimiLike = Object.assign(new Error("Too Many Requests"), { statusCode: 429, retryAfterMs: 5000 });
+		expect(classifySubagentRateLimit(kimiLike)).toEqual({
+			message: "Too Many Requests",
+			statusCode: 429,
+			retryAfterMs: 5000,
+		});
+		const headerLike = Object.assign(new Error("Too Many Requests"), {
+			status: 429,
+			headers: new Headers({ "retry-after": "30" }),
+		});
+		expect(classifySubagentRateLimit(headerLike)?.retryAfterMs).toBe(30_000);
+		const headerMsLike = Object.assign(new Error("Too Many Requests"), {
+			status: 429,
+			headers: new Headers({ "retry-after-ms": "1500" }),
+		});
+		expect(classifySubagentRateLimit(headerMsLike)?.retryAfterMs).toBe(1500);
+	});
+
+	it("only flags errored assistant messages", () => {
+		expect(rateLimitFromAssistantMessage(fauxAssistantMessage("fine"))).toBeUndefined();
+		expect(rateLimitFromAssistantMessage(fauxAssistantMessage([], { stopReason: "error" }))).toBeUndefined();
+		const rateLimited = rateLimitFromAssistantMessage(
+			fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 Too Many Requests" }),
+		);
+		expect(rateLimited).toMatchObject({ message: "429 Too Many Requests" });
 	});
 });

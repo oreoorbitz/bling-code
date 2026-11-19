@@ -44,7 +44,11 @@ describe("parseLingConfigureArgs", () => {
 			profile: "3.0-vl",
 			upstream: "deepinfra",
 		});
-		expect(() => parse(["--profile", "3.0-tiny"])).toThrow("--profile must be 3.1, 3.0, or 3.0-vl");
+		expect(() => parse(["--profile", "3.0-tiny"])).toThrow("--profile must be 3.1, 3.2, 3.0, or 3.0-vl");
+	});
+
+	test("selects the Ling 3.2 free-trial profile explicitly, pinned to Ant Digital", () => {
+		expect(parse(["--profile", "3.2"])).toEqual({ target: "openrouter", profile: "3.2", upstream: "antdigital" });
 	});
 
 	test("pins an explicit OpenRouter upstream and rejects it for a self-hosted endpoint", () => {
@@ -99,6 +103,26 @@ describe("parseLingConfigureArgs", () => {
 		expect(() =>
 			parse(["--base-url", "http://localhost:30000/v1", "--model-id", "inclusionai/ling-3.0-flash"]),
 		).toThrow("indicates Ling 3.0 but --profile is 3.1");
+		expect(() =>
+			parse([
+				"--base-url",
+				"http://localhost:30000/v1",
+				"--profile",
+				"3.2",
+				"--model-id",
+				"inclusionai/ling-3.1-flash",
+			]),
+		).toThrow("indicates Ling 3.1 but --profile is 3.2");
+		expect(
+			parseEndpoint([
+				"--base-url",
+				"http://localhost:30000/v1",
+				"--profile",
+				"3.2",
+				"--model-id",
+				"inclusionAI/Ling-3.2-flash",
+			]).modelId,
+		).toBe("inclusionAI/Ling-3.2-flash");
 		expect(
 			parseEndpoint(["--base-url", "http://localhost:30000/v1", "--model-id", "private-deployment"]).modelId,
 		).toBe("private-deployment");
@@ -113,6 +137,11 @@ describe("parseLingConfigureArgs", () => {
 			"is not a vision model but --profile is 3.0-vl",
 		);
 		expect(parseEndpoint([...base, "--profile", "3.0-vl"]).modelId).toBe("Ling-3.0-flash-vl");
+		// 3.2 Flash is multimodal by default, so the -vl naming check does not apply to it.
+		expect(parseEndpoint([...base, "--profile", "3.2"]).modelId).toBe("Ling-3.2-flash");
+		expect(parseEndpoint([...base, "--profile", "3.2", "--model-id", "inclusionai/ling-3.2-flash-vl"]).modelId).toBe(
+			"inclusionai/ling-3.2-flash-vl",
+		);
 	});
 
 	test("rejects a malformed endpoint with an actionable error", () => {
@@ -197,6 +226,28 @@ describe("configureLing on OpenRouter", () => {
 		expect(model?.compat).toMatchObject({
 			thinkingFormat: "openrouter",
 			openRouterRouting: { only: ["deepinfra"], allow_fallbacks: false },
+		});
+	});
+
+	test("applies the 3.2 override to the built-in free-trial catalog model", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ling-configure-32-runtime-"));
+		tempDirs.push(dir);
+		const modelsPath = join(dir, "models.json");
+
+		await configureLing(parse(["--profile", "3.2"]), SettingsManager.create(dir, dir), modelsPath);
+
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath,
+			allowModelNetwork: false,
+		});
+		const model = runtime.getModel("openrouter", "inclusionai/ling-3.2-flash:free");
+		expect(model?.input).toContain("image");
+		expect(model?.samplingParams).toEqual({ temperature: 1, top_p: 0.95, top_k: 20 });
+		expect(model?.compat).toMatchObject({
+			thinkingFormat: "openrouter",
+			openRouterRouting: { only: ["antdigital"], allow_fallbacks: false },
 		});
 	});
 });

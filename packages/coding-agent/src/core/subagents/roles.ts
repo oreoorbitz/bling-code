@@ -47,11 +47,11 @@ const ALL_SAMPLING_KEYS = ["temperature", "top_p", "top_k", "min_p", "repetition
  * Sampling parameters an OpenRouter upstream does not list as supported, keyed by upstream family (slug text before
  * "/"). With `require_parameters: true` a request carrying one of these has no eligible host and fails, so they are
  * rejected at validation time. A fact about hosts: built from `https://openrouter.ai/api/v1/models/<id>/endpoints`
- * `supported_parameters` on 2026-10-24 for the models in the documented arms (union across those models), and it must
+ * `supported_parameters` on 2026-11-17 for the models in the documented arms (union across those models), and it must
  * be rechecked before runs.
  */
 export const UNSUPPORTED_SAMPLING_BY_UPSTREAM: Record<string, readonly string[]> = {
-	inception: ["top_p", "top_k", "min_p", "repetition_penalty", "seed"], // mercury: temperature only
+	groq: ["top_k", "min_p", "repetition_penalty"], // gpt-oss-20b: temperature, top_p, seed
 	cerebras: ["top_k", "min_p", "repetition_penalty"],
 	novita: ["min_p"],
 	coreweave: ["min_p"],

@@ -116,6 +116,19 @@ const ImageSettingsSchema = Type.Object({
 			default: SETTINGS_DEFAULTS.images.blockImages,
 		}),
 	),
+	fetchLinkedImages: Type.Optional(
+		Type.Boolean({
+			description: "Download image URLs in prompts as attachments, within time and size bounds.",
+			default: SETTINGS_DEFAULTS.images.fetchLinkedImages,
+		}),
+	),
+	autoVisionSwitch: Type.Optional(
+		Type.Boolean({
+			description:
+				"Serve a prompt that carries images with Ling 3.2 when the session runs an OpenRouter Ling model without image input.",
+			default: SETTINGS_DEFAULTS.images.autoVisionSwitch,
+		}),
+	),
 });
 
 function thinkingBudgetsSettings(options?: TSchemaOptions) {

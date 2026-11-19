@@ -118,6 +118,8 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 | `terminal.trueColor` | `boolean \| "auto"` | `"auto"` | Override true-color detection. |
 | `images.autoResize` | boolean | `true` | Resize images to at most 2000 by 2000 pixels before sending them to a model. |
 | `images.blockImages` | boolean | `false` | Prevent images from being sent to models. |
+| `images.fetchLinkedImages` | boolean | `true` | Download image URLs in prompts as attachments, within time and size bounds. |
+| `images.autoVisionSwitch` | boolean | `true` | Serve a prompt that carries images with Ling 3.2 when the session runs an OpenRouter Ling model without image input. |
 | `markdown.codeBlockIndent` | string | `"  "` | Prefix used to indent rendered code blocks. |
 | `markdown.mermaid` | `"off" \| "final" \| "streaming"` | `"streaming"` | Mermaid rendering mode. |
 

@@ -113,6 +113,14 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { type BeforeAgentStartTrigger, emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { LING_OPENROUTER_PROVIDER_ID } from "./ling-models.ts";
+import {
+	extractImageUrls,
+	fetchPromptImages,
+	LING_VISION_MODEL_ID,
+	needsVisionSwitch,
+	pinnedVisionModel,
+} from "./ling-vision.ts";
 import { createToolNameMatcher, isMcpToolName } from "./mcp-servers.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
@@ -481,6 +489,8 @@ export class AgentSession {
 	private _baseSystemPromptOptions!: NormalizedBuildSystemPromptOptions;
 	/** Prompt options after before_agent_start mutations for the active run. */
 	private _runSystemPromptOptions?: NormalizedBuildSystemPromptOptions;
+	/** Model to return to when the run that the automatic vision switch moved to Ling 3.2 ends. */
+	private _visionRestoreModel: Model<any> | undefined;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -1878,6 +1888,7 @@ export class AgentSession {
 		try {
 			messages = await this._prepareRun(trigger);
 		} catch (error) {
+			await this._restoreVisionSwitch();
 			this._isAgentRunActive = false;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
@@ -1912,6 +1923,7 @@ export class AgentSession {
 			if (this._agentRunAbortRequested) this._finishCancelledRetry();
 			this._failedResponse = undefined;
 			this._runSystemPromptOptions = undefined;
+			await this._restoreVisionSwitch();
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
 			await this._emitAgentSettled();
@@ -1946,11 +1958,12 @@ export class AgentSession {
 		if (trigger.messageType === "custom") {
 			messages.push(trigger.message);
 		} else {
+			const vision = await this._prepareVisionInput(trigger.prompt, trigger.images);
 			// Normalize images after before_agent_start so extension-driven model selection
 			// determines the resize profile used for the request and history.
-			const normalized = await this._normalizePromptImages(trigger.images);
-			const text =
-				normalized.hints.length > 0 ? `${trigger.prompt}\n\n${normalized.hints.join("\n")}` : trigger.prompt;
+			const normalized = await this._normalizePromptImages(vision.images);
+			const hints = [...vision.hints, ...normalized.hints];
+			const text = hints.length > 0 ? `${trigger.prompt}\n\n${hints.join("\n")}` : trigger.prompt;
 			messages.push({
 				role: "user",
 				content: [{ type: "text", text }, ...normalized.images],
@@ -2057,6 +2070,69 @@ export class AgentSession {
 			return { text: inputResult.text, images: inputResult.images ?? images };
 		}
 		return { text, images };
+	}
+
+	/**
+	 * Fetch linked images and switch an OpenRouter Ling text model to Ling 3.2 when the turn
+	 * carries images. The switch lasts for this run only and is announced: setModel emits
+	 * model_select and records the change, a hint names it in the transcript, and the run's end
+	 * switches back the same way, so a resumed session restores the configured model. Every
+	 * failure degrades to a hint; the prompt always proceeds.
+	 */
+	private async _prepareVisionInput(
+		prompt: string,
+		images: ImageContent[] | undefined,
+	): Promise<{ images: ImageContent[] | undefined; hints: string[] }> {
+		const hints: string[] = [];
+		let current = images;
+		if (this.settingsManager.getFetchLinkedImages() && !this.settingsManager.getBlockImages()) {
+			const urls = extractImageUrls(prompt);
+			if (urls.length > 0) {
+				const fetched = await fetchPromptImages(urls, {
+					autoResizeImages: this.settingsManager.getImageAutoResize(),
+				});
+				current = [...(current ?? []), ...fetched.images];
+				hints.push(...fetched.hints);
+			}
+		}
+		if (
+			current &&
+			current.length > 0 &&
+			this.settingsManager.getAutoVisionSwitch() &&
+			!this.settingsManager.getBlockImages() &&
+			needsVisionSwitch(this.model)
+		) {
+			const vision = this._modelRuntime.getModel(LING_OPENROUTER_PROVIDER_ID, LING_VISION_MODEL_ID);
+			const previous = this.model;
+			if (!vision) {
+				hints.push(`[Ling 3.2 (${LING_VISION_MODEL_ID}) is not in the model catalog; images will be omitted.]`);
+			} else {
+				try {
+					await this.setModel(pinnedVisionModel(vision));
+					this._visionRestoreModel ??= previous;
+					hints.push(
+						`[Switched to ${vision.provider}/${vision.id} for this image turn; the session returns to ${previous?.provider}/${previous?.id} afterwards.]`,
+					);
+				} catch (error) {
+					hints.push(
+						`[Could not switch to ${LING_VISION_MODEL_ID}: ${error instanceof Error ? error.message : error}]`,
+					);
+				}
+			}
+		}
+		return { images: current, hints };
+	}
+
+	/** Switch back from an automatic vision switch; a failure keeps Ling 3.2 rather than failing the run. */
+	private async _restoreVisionSwitch(): Promise<void> {
+		const restore = this._visionRestoreModel;
+		if (restore === undefined) return;
+		this._visionRestoreModel = undefined;
+		try {
+			await this.setModel(restore);
+		} catch {
+			// setModel only fails on missing auth, which the restored model had when the run started.
+		}
 	}
 
 	private async _normalizePromptImages(
