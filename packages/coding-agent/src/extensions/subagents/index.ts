@@ -109,6 +109,8 @@ export interface SubagentsExtensionOptions {
 	onCapacityEvent?: (event: CapacityEvent, ctx: ExtensionContext, settings: Settings) => void | Promise<void>;
 	/** Clock for the capacity governor; tests inject one. */
 	now?: () => number;
+	/** Launch pause after a rate limit, in milliseconds; tests shorten it. */
+	capacityPauseMs?: number;
 }
 
 const scoutQuestionSchema = Type.String({ description: "What to find out. One focused question." });
@@ -696,6 +698,7 @@ export function createSubagentsExtension(extensionOptions: SubagentsExtensionOpt
 		const now = extensionOptions.now ?? Date.now;
 		const capacity = new SubagentCapacity({
 			now,
+			...(extensionOptions.capacityPauseMs === undefined ? {} : { pauseMs: extensionOptions.capacityPauseMs }),
 			onEvent: (event) => {
 				const ctx = latestCtx;
 				if (ctx === undefined || extensionOptions.onCapacityEvent === undefined) return;

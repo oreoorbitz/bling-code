@@ -102,6 +102,14 @@ Pi's existing behavior is retained:
 
 The catalog's or endpoint's context and output limits control when compaction occurs. Do not set a 1M context merely because the model architecture supports it.
 
+### Long-session guards
+
+Three guards, ported from qwen-code, keep a cheap model's long sessions from thrashing or filling the context. They live in the built-in `long-session` extension (`src/core/long-session/`), are configured under `longSession` in settings, and are all off under the `stock` harness profile so it stays an upstream-Pi control. Changing them from their defaults changes the benchmark arm ID.
+
+- **Loop protection** (`longSession.loopProtection`, default `"warn"`). Counts the tool calls of one agent run (a prompt and its tool-result continuations). The same tool with identical arguments 3 times in a row gets a `System:` reminder appended to its result ("its result will not change; use the result you already have, or change the approach"); 6 consecutive bash commands that only run `git status`, an overview `git diff`, or `git ls-files` get one too; past 100 calls in a run, a call repeated 4 times anywhere gets one. Under `"stop"`, the 5th identical call, the 8th inspection, or the 6th repeat past 100 calls is blocked with the reminder as its result and the run ends; under `"warn"` those points only remind again. Past 1000 calls the run stops in either mode. Calls issued by codemode scripts are not counted.
+- **Old tool result clearing** (`longSession.clearToolResultsChars`, default 500000; `keepRecentToolResults`, default 5). Before each model request, when the results of `read`, `bash`, `powershell`, `grep`, `find`, `ls`, `edit`, and `write` in the context exceed the threshold, the oldest are replaced with `[Old tool result content cleared]` until the rest fit in half of it. The calls and their arguments stay, as do errors, the most recent results, and subagent results. Clearing to half rather than just under the threshold keeps it rare, because each clearing changes the prompt prefix and costs one provider cache miss. Only the context sent to the model changes; the saved session keeps every result. `0` disables it.
+- **Read cache** (`longSession.readCache`, default on). A repeated `read` of an unchanged file (same device and inode, mtime, and size) with the same offset and limit returns a short note pointing at the earlier result instead of the content. A different range always reads. The cache forgets a file when its earlier result is cleared from the context, after a compaction, and on a branch switch, so the note never points at content the model no longer has.
+
 ## Project-local learning
 
 Bling Code keeps learning state separate for each project under `.bling/learning/`:

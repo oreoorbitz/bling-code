@@ -52,6 +52,8 @@ interface HostState {
 
 export interface SubagentCapacityOptions {
 	now?: () => number;
+	/** Launch pause after a rate limit; defaults to {@link LAUNCH_PAUSE_MS}. */
+	pauseMs?: number;
 	onEvent?: (event: CapacityEvent) => void;
 }
 
@@ -62,10 +64,12 @@ export class SubagentCapacity {
 	private readonly hosts = new Map<string, HostState>();
 	private readonly listeners = new Set<() => void>();
 	private readonly now: () => number;
+	private readonly pauseMs: number;
 	private readonly onEvent: ((event: CapacityEvent) => void) | undefined;
 
 	constructor(options: SubagentCapacityOptions = {}) {
 		this.now = options.now ?? Date.now;
+		this.pauseMs = options.pauseMs ?? LAUNCH_PAUSE_MS;
 		this.onEvent = options.onEvent;
 	}
 
@@ -137,7 +141,7 @@ export class SubagentCapacity {
 			}
 		}
 		host.lastRateLimitAt = now;
-		host.pausedUntil = now + LAUNCH_PAUSE_MS;
+		host.pausedUntil = now + this.pauseMs;
 		this.emit("rate_limited", host);
 		this.scheduleWakeup(host);
 	}

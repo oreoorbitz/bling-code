@@ -84,7 +84,7 @@ export function subagentActionInput(
 		...(parentActionId === undefined ? {} : { parentActionId }),
 		...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
 		harnessProfile,
-		armId: armIdFromSettings(harnessProfile, settings.subagents),
+		armId: armIdFromSettings(harnessProfile, settings.subagents, process.env, settings.longSession),
 	};
 }
 
@@ -123,7 +123,7 @@ export function subagentVerdictActionInput(
 		parentToolCallId: toolCallId,
 		...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
 		harnessProfile: harnessProfileOf(settings),
-		armId: armIdFromSettings(harnessProfileOf(settings), settings.subagents),
+		armId: armIdFromSettings(harnessProfileOf(settings), settings.subagents, process.env, settings.longSession),
 	};
 }
 
@@ -159,7 +159,7 @@ export async function recordCapacityEvent(
 			parentSessionId: ctx.sessionManager.getSessionId(),
 			...(benchmarkRunId === undefined ? {} : { benchmarkRunId }),
 			harnessProfile,
-			armId: armIdFromSettings(harnessProfile, settings.subagents),
+			armId: armIdFromSettings(harnessProfile, settings.subagents, process.env, settings.longSession),
 		}),
 	);
 }

@@ -704,6 +704,46 @@
         }
       }
     },
+    "longSession": {
+      "type": "object",
+      "properties": {
+        "loopProtection": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "off"
+            },
+            {
+              "type": "string",
+              "const": "warn"
+            },
+            {
+              "type": "string",
+              "const": "stop"
+            }
+          ],
+          "description": "Repeated-tool-call protection. \"warn\" adds a reminder to the repeating call's result; \"stop\" also blocks the call and ends the turn at the stop point; \"off\" disables it. Inactive under the \"stock\" harness profile.",
+          "default": "warn"
+        },
+        "clearToolResultsChars": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "When old tool results in the model context exceed this many characters, clear the oldest down to half of it (the saved session keeps them). 0 disables. Inactive under the stock profile.",
+          "default": 500000
+        },
+        "keepRecentToolResults": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Most recent tool results never cleared by clearToolResultsChars.",
+          "default": 5
+        },
+        "readCache": {
+          "type": "boolean",
+          "description": "Answer a repeated read of an unchanged file, with the same offset and limit, with a short note instead of the content again. Inactive under the stock profile.",
+          "default": true
+        }
+      }
+    },
     "harness": {
       "type": "object",
       "properties": {

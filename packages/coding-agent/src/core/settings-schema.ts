@@ -236,6 +236,38 @@ const HarnessSettingsSchema = Type.Object({
 	),
 });
 
+const LongSessionSettingsSchema = Type.Object({
+	loopProtection: Type.Optional(
+		Type.Union([Type.Literal("off"), Type.Literal("warn"), Type.Literal("stop")], {
+			description:
+				'Repeated-tool-call protection. "warn" adds a reminder to the repeating call\'s result; "stop" also blocks the call and ends the turn at the stop point; "off" disables it. Inactive under the "stock" harness profile.',
+			default: SETTINGS_DEFAULTS.longSession.loopProtection,
+		}),
+	),
+	clearToolResultsChars: Type.Optional(
+		Type.Integer({
+			minimum: 0,
+			description:
+				"When old tool results in the model context exceed this many characters, clear the oldest down to half of it (the saved session keeps them). 0 disables. Inactive under the stock profile.",
+			default: SETTINGS_DEFAULTS.longSession.clearToolResultsChars,
+		}),
+	),
+	keepRecentToolResults: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			description: "Most recent tool results never cleared by clearToolResultsChars.",
+			default: SETTINGS_DEFAULTS.longSession.keepRecentToolResults,
+		}),
+	),
+	readCache: Type.Optional(
+		Type.Boolean({
+			description:
+				"Answer a repeated read of an unchanged file, with the same offset and limit, with a short note instead of the content again. Inactive under the stock profile.",
+			default: SETTINGS_DEFAULTS.longSession.readCache,
+		}),
+	),
+});
+
 const SubagentSamplingSchema = Type.Object(
 	{
 		temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
@@ -552,6 +584,7 @@ export const SettingsSchema = Type.Object(
 		warnings: Type.Optional(WarningSettingsSchema),
 		codemode: Type.Optional(CodemodeSettingsSchema),
 		learning: Type.Optional(LearningSettingsSchema),
+		longSession: Type.Optional(LongSessionSettingsSchema),
 		harness: Type.Optional(HarnessSettingsSchema),
 		subagents: Type.Optional(SubagentSettingsSchema),
 		sessionDir: Type.Optional(
@@ -645,6 +678,7 @@ export type FullscreenExitOutput = NonNullable<SettingsInput["fullscreenExitOutp
 export type TuiMode = NonNullable<SettingsInput["tuiMode"]>;
 export type HarnessProfile = NonNullable<NonNullable<SettingsInput["harness"]>["profile"]>;
 export interface SubagentSettings extends Static<typeof SubagentSettingsSchema> {}
+export interface LongSessionSettings extends Static<typeof LongSessionSettingsSchema> {}
 export type SubagentRoleConfig = Static<typeof SubagentRoleSchema>;
 export type SubagentBudgets = Static<typeof SubagentBudgetsSchema>;
 export type SubagentScriptConfig = Static<typeof SubagentScriptSchema>;

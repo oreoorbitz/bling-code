@@ -177,7 +177,11 @@ function resolveRunOptions(
 	}
 	if (flags.delegation) childEnv[ENV_SUBAGENT_DELEGATION] = flags.delegation;
 	const armEnv = benchmark.environmentMode === "inherit" ? { ...process.env, ...childEnv } : childEnv;
-	return { harnessProfile, armId: armIdFromSettings(harnessProfile, subagents, armEnv), childEnv };
+	return {
+		harnessProfile,
+		armId: armIdFromSettings(harnessProfile, subagents, armEnv, settingsManager.getSettings().longSession),
+		childEnv,
+	};
 }
 
 function formatCost(value: number): string {

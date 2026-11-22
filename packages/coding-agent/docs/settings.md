@@ -64,6 +64,10 @@ CLI tool options override this setting for one invocation. `--tools` with only `
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `harness.profile` | `"bling"` \| `"bling-noverify"` \| `"bling-lean"` \| `"stock"` | `"bling"` | `bling` keeps Bling Code's prompt additions (strong-solver and oracle-gate disciplines, Bling identity, extra rules) and curated project memory. `bling-noverify` drops the `verification_discipline` section; `bling-lean` also drops the extra rules (prompt ablations for benchmarking). `stock` reproduces upstream Pi's system prompt and injects no curated memory or `project_memory` tool, so a run can serve as the control when benchmarking harness changes. Model selection and sampling are unchanged. The `--harness` flag overrides it for one run. |
+| `longSession.loopProtection` | `"off"` \| `"warn"` \| `"stop"` | `"warn"` | Repeated-tool-call protection: reminders at 3 identical calls in a row, 6 repository-inspection commands, or a call repeated 4 times past 100 calls in a run; `stop` also ends the run at 5, 8, or 6. Past 1000 calls a run stops in either mode. Off under the `stock` profile. |
+| `longSession.clearToolResultsChars` | number | `500000` | When old `read`/`bash`/`grep`/`find`/`ls`/`edit`/`write` results in the model context exceed this many characters, clear the oldest down to half of it (the saved session keeps them). `0` disables. Off under the `stock` profile. |
+| `longSession.keepRecentToolResults` | number | `5` | Most recent tool results never cleared. |
+| `longSession.readCache` | boolean | `true` | Answer a repeated read of an unchanged file with the same offset and limit with a short note instead of the content. Off under the `stock` profile. |
 
 ## Sessions and context
 

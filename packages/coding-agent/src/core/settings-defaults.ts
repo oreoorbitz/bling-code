@@ -76,6 +76,12 @@ export const SETTINGS_DEFAULTS = {
 			minProbability: 0.55,
 		},
 	},
+	longSession: {
+		loopProtection: "warn",
+		clearToolResultsChars: 500_000,
+		keepRecentToolResults: 5,
+		readCache: true,
+	},
 	harness: {
 		profile: "bling",
 	},

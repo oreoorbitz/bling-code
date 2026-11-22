@@ -4,8 +4,15 @@ import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai/
 import { APP_NAME } from "../../config.ts";
 import { canonicalJson } from "../learning/action-store.ts";
 import { LING_OPENROUTER_PROVIDER_ID } from "../ling-models.ts";
+import { longSessionConfig, longSessionIsDefault } from "../long-session/config.ts";
 import type { HarnessProfile } from "../settings-manager.ts";
-import type { SubagentBudgets, SubagentRoleConfig, SubagentRoleKind, SubagentSettings } from "../settings-schema.ts";
+import type {
+	LongSessionSettings,
+	SubagentBudgets,
+	SubagentRoleConfig,
+	SubagentRoleKind,
+	SubagentSettings,
+} from "../settings-schema.ts";
 
 export type RoleKind = SubagentRoleKind;
 export const ROLE_KINDS: readonly RoleKind[] = ["scout", "coder"];
@@ -281,11 +288,15 @@ export function resolveRole(
 	};
 }
 
-/** Stable arm label: harness profile + armLabel + hash of the active role identities and delegation mode. No model lookup. */
+/**
+ * Stable arm label: harness profile + armLabel + hash of the active role identities, the delegation mode, and
+ * non-default long-session guards. No model lookup.
+ */
 export function armIdFromSettings(
 	harness: HarnessProfile,
 	settings: SubagentSettings | undefined,
 	env: NodeJS.ProcessEnv = process.env,
+	longSession?: LongSessionSettings,
 ): string {
 	const names = activeRoleNames(settings, env);
 	const identities: object[] = ROLE_KINDS.flatMap((kind) => {
@@ -295,6 +306,9 @@ export function armIdFromSettings(
 		return [config ? roleIdentity(name, config) : { kind, name, missing: true }];
 	});
 	if (identities.length > 0) identities.push({ delegation: delegationMode(settings, env) });
+	// Long-session guards count only when changed from the profile's default, so existing arm IDs stay.
+	if (!longSessionIsDefault(harness, longSession))
+		identities.push({ longSession: longSessionConfig(harness, longSession) });
 	const hash =
 		identities.length === 0
 			? "none"

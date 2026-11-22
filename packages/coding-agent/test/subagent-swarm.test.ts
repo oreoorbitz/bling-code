@@ -47,6 +47,7 @@ afterEach(() => {
 
 interface SetupOptions {
 	onCapacityEvent?: (event: CapacityEvent) => void;
+	capacityPauseMs?: number;
 	subagents?: Settings["subagents"];
 	fauxOptions?: Parameters<typeof registerFaux>[0];
 	onRunComplete?: SubagentRunCompleteHook;
@@ -81,6 +82,7 @@ function setup(options: SetupOptions = {}) {
 		onRunComplete: options.onRunComplete,
 		onVerdict: options.onVerdict,
 		onCapacityEvent: options.onCapacityEvent,
+		capacityPauseMs: options.capacityPauseMs,
 	})(api);
 	handlers.get("session_start")?.();
 	const streamer = fauxStreamer();
@@ -735,39 +737,49 @@ describe("sibling coders", () => {
 });
 
 describe("shared host capacity", () => {
-	it("learns a host limit from a rate limit, records it, and reports it to Ling in later calls", async () => {
-		const events: CapacityEvent[] = [];
-		const { faux, run } = setup({ subagents: SCOUT_ONLY, onCapacityEvent: (event) => events.push(event) });
-		let throttled = false;
-		faux.setResponses(
-			Array.from({ length: 6 }, () => (context: TranscriptContext) => {
-				if (userPrompt(context).includes("aaaa") && !throttled) {
-					throttled = true;
-					return fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 Too Many Requests" });
-				}
-				return toolCall("report", EMPTY_REPORT);
-			}),
-		);
-		const first = await run(
-			SUBAGENT_SWARM_TOOL_NAME,
-			swarmParams([scoutTask("aaaa"), scoutTask("bbbb"), scoutTask("cccc")]),
-		);
-		expect(swarmDetails(first).results.map((summary) => summary.outcome)).toEqual([
-			"completed",
-			"completed",
-			"completed",
-		]);
-		const host = "openrouter/faux-1@chutes/fp8";
-		const firstView = (first.details as { concurrency: Array<{ host: string; limit?: number }> }).concurrency;
-		expect(firstView).toEqual([expect.objectContaining({ host, running: 0 })]);
-		expect(firstView[0]?.limit).toBeGreaterThanOrEqual(1);
-		expect(JSON.parse((first.content[0] as { text: string }).text).concurrency).toEqual(firstView);
-		expect(events.map((event) => event.type)).toContain("rate_limited");
-		expect(events.every((event) => event.key === host)).toBe(true);
+	it(
+		"learns a host limit from a rate limit, records it, and reports it to Ling in later calls",
+		{ timeout: 20_000 },
+		async () => {
+			const events: CapacityEvent[] = [];
+			// If the other scouts finish before the rate limit is reported, no success lifts the pause, so the
+			// retry waits the whole pause; keep it short here.
+			const { faux, run } = setup({
+				subagents: SCOUT_ONLY,
+				onCapacityEvent: (event) => events.push(event),
+				capacityPauseMs: 100,
+			});
+			let throttled = false;
+			faux.setResponses(
+				Array.from({ length: 6 }, () => (context: TranscriptContext) => {
+					if (userPrompt(context).includes("aaaa") && !throttled) {
+						throttled = true;
+						return fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 Too Many Requests" });
+					}
+					return toolCall("report", EMPTY_REPORT);
+				}),
+			);
+			const first = await run(
+				SUBAGENT_SWARM_TOOL_NAME,
+				swarmParams([scoutTask("aaaa"), scoutTask("bbbb"), scoutTask("cccc")]),
+			);
+			expect(swarmDetails(first).results.map((summary) => summary.outcome)).toEqual([
+				"completed",
+				"completed",
+				"completed",
+			]);
+			const host = "openrouter/faux-1@chutes/fp8";
+			const firstView = (first.details as { concurrency: Array<{ host: string; limit?: number }> }).concurrency;
+			expect(firstView).toEqual([expect.objectContaining({ host, running: 0 })]);
+			expect(firstView[0]?.limit).toBeGreaterThanOrEqual(1);
+			expect(JSON.parse((first.content[0] as { text: string }).text).concurrency).toEqual(firstView);
+			expect(events.map((event) => event.type)).toContain("rate_limited");
+			expect(events.every((event) => event.key === host)).toBe(true);
 
-		// The next call starts from the learned limit instead of learning it again.
-		const second = await run(SUBAGENT_SWARM_TOOL_NAME, swarmParams([scoutTask("dddd"), scoutTask("eeee")]));
-		const secondView = (second.details as { concurrency: Array<{ limit?: number }> }).concurrency;
-		expect(secondView[0]?.limit).toBe(firstView[0]?.limit);
-	});
+			// The next call starts from the learned limit instead of learning it again.
+			const second = await run(SUBAGENT_SWARM_TOOL_NAME, swarmParams([scoutTask("dddd"), scoutTask("eeee")]));
+			const secondView = (second.details as { concurrency: Array<{ limit?: number }> }).concurrency;
+			expect(secondView[0]?.limit).toBe(firstView[0]?.limit);
+		},
+	);
 });

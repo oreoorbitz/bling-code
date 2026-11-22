@@ -29,7 +29,12 @@ function readLearningSettings(pi: ExtensionAPI) {
 		actionLog: settings?.actionLog !== false,
 		memory: settings?.memory !== false,
 		harnessProfile: harnessProfileOf(pi.getSettings()),
-		armId: armIdFromSettings(harnessProfileOf(pi.getSettings()), pi.getSettings().subagents),
+		armId: armIdFromSettings(
+			harnessProfileOf(pi.getSettings()),
+			pi.getSettings().subagents,
+			process.env,
+			pi.getSettings().longSession,
+		),
 		decider: settings?.decider,
 		review: settings?.review,
 	};
